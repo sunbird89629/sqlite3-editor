@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.cargo.features": ["sqlite"],
+    "rust-analyzer.check.command": "clippy",
+    "explorer.fileNesting.patterns": {
+        "Cargo.toml": "Cargo.lock",
+        "*.rs": "${capture}_test.rs"
+    },
+    "workbench.tree.indent": 16
+}

@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+      - run: sudo apt install -y libsqlite3-mod-spatialite
+      - run: cargo test
+      - id: version
+        run: |
+          version=$(grep "^version" Cargo.toml | sed 's/version = "//g' | sed 's/"//g')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-pc:  # Windows 8+
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-pc-windows-msvc  # NOTE: aarch64-win7-windows-msvc does not exist
+            vsce_target: win32-arm64
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          targets: ${{ matrix.target }}
+      - run: |
+          $ErrorActionPreference = "Stop"
+
+          rustup target add ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/sqlite3-editor.exe sqlite3-editor-${{ matrix.vsce_target }}.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifact-${{ matrix.vsce_target }}.exe
+          path: sqlite3-editor-${{ matrix.vsce_target }}.exe
+          retention-days: 1
+
+  build-win7:  # Windows 7+
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-win7-windows-msvc
+            vsce_target: win32-x64
+          - target: i686-win7-windows-msvc
+            vsce_target: win32-ia32
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2024-05-16
+          # prebuilt toolchains are unavailable for win7 targets
+          # backtrace\src\symbolize\dbghelp.rs:111:9 failed to compile with the latest version of nightly Rust.
+      - run: |
+          $ErrorActionPreference = "Stop"
+
+          rustup +nightly-2024-05-16 component add rust-src
+          cargo +nightly-2024-05-16 build -Z build-std --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/sqlite3-editor.exe sqlite3-editor-${{ matrix.vsce_target }}.exe
+      - name: Test
+        run: target/${{ matrix.target }}/release/sqlite3-editor.exe version
+        if: ${{ matrix.target == 'x86_64-win7-windows-msvc' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifact-${{ matrix.vsce_target }}.exe
+          path: sqlite3-editor-${{ matrix.vsce_target }}.exe
+          retention-days: 1
+
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            vsce_target: linux-x64-gnu
+          - target: x86_64-unknown-linux-musl
+            vsce_target: linux-x64-musl
+          - target: aarch64-unknown-linux-gnu
+            vsce_target: linux-arm64-gnu
+          - target: aarch64-unknown-linux-musl
+            vsce_target: linux-arm64-musl
+          - target: armv7-unknown-linux-gnueabihf
+            vsce_target: linux-arm-gnu
+          - target: arm-unknown-linux-musleabi
+            vsce_target: linux-arm-musl
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          targets: ${{ matrix.target }}
+      - run: cargo install cross --git https://github.com/cross-rs/cross
+      - run: |
+          set -xEeuo pipefail
+
+          # https://github.com/cross-rs/cross/wiki/FAQ#exec-format-error
+          docker run --privileged --rm tonistiigi/binfmt --install all
+
+          rustup override set nightly
+          rustup update
+          cross build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/sqlite3-editor sqlite3-editor-${{ matrix.vsce_target }}
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifact-${{ matrix.vsce_target }}
+          path: sqlite3-editor-${{ matrix.vsce_target }}
+          retention-days: 1
+
+  build-darwin:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            vsce_target: darwin-x64
+          - target: aarch64-apple-darwin
+            vsce_target: darwin-arm64
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          targets: ${{ matrix.target }}
+      - run: |
+          set -xEeuo pipefail
+
+          cargo build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/sqlite3-editor sqlite3-editor-${{ matrix.vsce_target }}
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifact-${{ matrix.vsce_target }}
+          path: sqlite3-editor-${{ matrix.vsce_target }}
+          retention-days: 1
+
+  release:
+    needs:
+      - build-win7
+      - build-pc
+      - build-linux
+      - build-darwin
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - run: |
+          for i in ./artifact-*/*
+            do cp -r "$i" .
+          done
+          chmod a+x ./sqlite3-editor-*
+          tar -cvf sqlite3-editor.tar ./sqlite3-editor-*
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: 'sqlite3-editor.tar'
+          name: ${{ needs.test.outputs.version }}
+          tag_name: ${{ needs.test.outputs.version }}
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
