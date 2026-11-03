@@ -10,7 +10,7 @@ export default {
   fullyParallel: false,  // Don't run tests in files in parallel
   forbidOnly: !!process.env.CI,  // Fail the build on CI if you accidentally left test.only in the source code.
   retries: process.env.CI ? 2 : 0,  // Retry on CI only
-  workers: process.env.CI ? 1 : undefined,  // Opt out of parallel tests on CI.
+  workers: 1, // Tests share a single database and must not run concurrently.
   reporter: 'html',
   use: {
     actionTimeout: 0,

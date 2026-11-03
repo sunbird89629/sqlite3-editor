@@ -1,4 +1,5 @@
 webview/
+bin/
 node_modules/
 *.vsix
 extension.js

@@ -3,7 +3,8 @@ enableMapSet()
 
 import { render } from "preact"
 import { Editor, useEditorStore } from "./editor"
-import { useEffect, useRef } from "preact/hooks"
+import { useEffect, useRef, useState } from "preact/hooks"
+import { QueryEditor } from "./query_editor"
 import * as remote from "./remote"
 import { Button, Checkbox, flash, Highlight, persistentUseState, renderContextmenu, Select, SVGOnlyCheckbox } from "./components"
 import { escapeSQLIdentifier, Table, useTableStore } from "./table"
@@ -55,6 +56,8 @@ const LoadingIndicator = () => {
 
 /** The root element. */
 const App = () => {
+    const [showQueryEditor, setShowQueryEditor] = useState(false)
+    const [queryResult, setQueryResult] = useState<{ columns: string[], rows: string[][], total: number } | null>(null)
     const requireReloading = useTableStore((s) => s.requireReloading)
     const isConfirmationDialogVisible = useTableStore((s) => s.isConfirmDialogVisible)
     const errorMessage = useTableStore((s) => s.errorMessage)
@@ -74,6 +77,14 @@ const App = () => {
     const confirmDialogRef = useRef<HTMLDialogElement>(null)
     const tableRef = useRef<HTMLDivElement>(null)
     const columnSelectDialogRef = useRef<HTMLDialogElement>(null)
+
+    useEffect(() => {
+        const listener = (event: MessageEvent) => {
+            if (event.data?.type === "sqlite3-editor-query-result") { setQueryResult(event.data) }
+        }
+        window.addEventListener("message", listener)
+        return () => window.removeEventListener("message", listener)
+    }, [])
 
     // Show or close the confirmation dialog
     useEffect(() => {
@@ -218,6 +229,7 @@ const App = () => {
                     }} data-testid="create-index-button"></SVGOnlyCheckbox>}
 
                     {/* Custom Query button */}
+                    <Button class="mr-2" onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
                     <SVGOnlyCheckbox icon="#terminal" title="Custom Query" checked={editorStatement === "Custom Query"} onClick={(checked) => {
                         if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
                         useEditorStore.getState().custom(tableName)
@@ -309,6 +321,11 @@ const App = () => {
         </p>}
 
         {/* Editor */}
+        {queryResult && <section class="p-2 border border-[var(--td-border-color)]" data-testid="native-query-result">
+            <div class="flex gap-2 items-center"><strong>Query result</strong><span>{queryResult.total} row(s){queryResult.total > 500 ? " (first 500 shown)" : ""}</span><Button secondary onClick={() => setQueryResult(null)}>Close</Button></div>
+            <div class="overflow-auto max-h-[30vh]"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
+        </section>}
+        <div style={{ display: showQueryEditor ? undefined : "none" }}><QueryEditor /></div>
         <Editor />
 
         {/* Confirmation Dialog */}

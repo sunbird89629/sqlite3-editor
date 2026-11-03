@@ -134,8 +134,14 @@ impl Pager {
         }
 
         // Add margins before and after the queried area
-        let limit_with_margin = limit + self.config.margin_start.min(offset) + self.config.margin_end;
-        params[len - 2] = CLIValue::I64(limit_with_margin.try_into().unwrap());
+        let Some(limit_with_margin) = limit
+            .checked_add(self.config.margin_start.min(offset))
+            .and_then(|n| n.checked_add(self.config.margin_end))
+            .filter(|&n| i64::try_from(n).is_ok())
+        else {
+            return Ok(None);
+        };
+        params[len - 2] = CLIValue::I64(limit_with_margin as i64);
         let offset_with_margin = offset.saturating_sub(self.config.margin_start);
         params[len - 1] = CLIValue::I64(offset_with_margin.try_into().unwrap());
 

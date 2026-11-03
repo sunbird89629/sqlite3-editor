@@ -13,8 +13,35 @@ static REGEX_CACHE: Lazy<Arc<Mutex<(String, regex::Regex)>>> = Lazy::new(|| {
         regex::Regex::new("").unwrap(),
     )))
 });
+static LEGACY_REGEX_CACHE: Lazy<Mutex<Option<(String, bool, Option<regex::Regex>)>>> = Lazy::new(|| Mutex::new(None));
 
 pub fn register_sqlite_functions_for_find_widget(con: &rusqlite::Connection) -> std::result::Result<(), CLIError> {
+    // Compatibility with the public editor's four-argument search function.
+    con.create_scalar_function(
+        "find_widget_regexp",
+        4,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        move |ctx| {
+            let pattern = ctx.get::<String>(1)?;
+            let whole_word = ctx.get::<i64>(2)? != 0;
+            let case_sensitive = ctx.get::<i64>(3)? != 0;
+            let pattern = if whole_word { format!(r"\b(?:{pattern})\b") } else { pattern };
+            let mut cache = LEGACY_REGEX_CACHE.lock().unwrap();
+            if !cache
+                .as_ref()
+                .is_some_and(|(cached_pattern, cached_case, _)| cached_pattern == &pattern && *cached_case == case_sensitive)
+            {
+                let regex = regex::RegexBuilder::new(&pattern).case_insensitive(!case_sensitive).build().ok();
+                *cache = Some((pattern, case_sensitive, regex));
+            }
+            let matches = cache
+                .as_ref()
+                .and_then(|(_, _, regex)| regex.as_ref())
+                .is_some_and(|regex| regex.is_match(&get_find_widget_input(ctx)));
+            Ok(i64::from(matches))
+        },
+    )
+    .or_else(|err| CLIError::new_ffi_error(err, "sqlite3_create_function_v2", &["find_widget_regexp".into()]))?;
     // Register functions
     con.create_scalar_function(
         "find_widget_compare_w_c",

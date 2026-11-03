@@ -104,7 +104,9 @@ impl PagerCacheEntry {
     pub(super) fn insert(&mut self, offset: u64, mut record: MessagePackArray) {
         record.shrink_to_fit();
         self.total_size_bytes += record.memory_usage() as u64;
-        self.records.insert(offset, record);
+        if let Some(previous) = self.records.insert(offset, record) {
+            self.total_size_bytes = self.total_size_bytes.saturating_sub(previous.memory_usage() as u64);
+        }
     }
 
     /// Returns the ending offset of `OFFSET ? LIMIT ?`. The returned value is always greater than or equal to the `offset`.
@@ -146,5 +148,21 @@ impl PagerCacheEntry {
         }
 
         Some(Records::new(col_buf, columns))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replacing_a_cached_record_does_not_inflate_its_size() {
+        let mut entry = PagerCacheEntry::new("query".into(), vec![], HashMap::new(), None, None);
+        let mut record = MessagePackArray::new();
+        record.push_value(&"value");
+        entry.insert(0, record.clone());
+        let size = entry.total_size_bytes();
+        entry.insert(0, record);
+        assert_eq!(entry.total_size_bytes(), size);
     }
 }

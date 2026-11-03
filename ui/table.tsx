@@ -88,6 +88,7 @@ export const useTableStore = createStore("useTableStore", {
     indexInfo: [] as remote.IndexInfo[],
     indexSchema: [] as (string | null)[],
     tableSchema: null as string | null,
+    rowIdColumn: null as string | null,
     /** Represents whether the active table has an AUTOINCREMENT column. */
     autoIncrement: false,
     /** the records in the visible area */
@@ -95,8 +96,12 @@ export const useTableStore = createStore("useTableStore", {
     /** the state of the textbox shown over a cell */
     input: null as { readonly draftValue: JSXInternal.Element, readonly textarea: HTMLTextAreaElement | null } | null,
 }, (set, get) => {
+    let reloadGeneration = 0
+    let schemaTable: string | undefined
+    let pageSnapshot: { table: string, filter: string, params: string[], top: bigint, records: readonly Record<string, remote.SQLite3Value>[] } | null = null
     /** Queries the visible area of the database table. */
     const reloadTable = async (reloadSchema: boolean, reloadRecordCount: boolean) => {
+        const generation = ++reloadGeneration
         try {
             let state = get()
 
@@ -121,45 +126,70 @@ export const useTableStore = createStore("useTableStore", {
                 tableInfo = !reloadSchema ? get().tableInfo : (await remote.query(`SELECT * FROM ${subquery} LIMIT 0`, [], "r", { withoutLogging: true })).columns.map((column, i): remote.TableInfo[number] => ({ name: column, cid: BigInt(i), dflt_value: null, notnull: 0n, pk: 0n, type: "" }))
             }
 
+            // SQLite's hidden rowid aliases can be shadowed by declared columns.
+            // table_info omits generated columns, so inspect the actual result columns too.
+            const columnNames = hasRowId && reloadSchema ? (await remote.query(`SELECT * FROM ${subquery} LIMIT 0`, [], "r", { withoutLogging: true })).columns : []
+            const rowIdColumn = hasRowId ? (reloadSchema ? ["rowid", "_rowid_", "oid"].find((name) => !columnNames.some((column) => column.toLowerCase() === name)) ?? null : get().rowIdColumn) : null
+            const retainedColumns = reloadSchema && !state.useCustomViewerQuery && state.tableName === schemaTable ? state.visibleColumns.filter((name) => tableInfo.some((column) => column.name === name)) : []
+            const selectedColumns = retainedColumns.length ? retainedColumns : tableInfo.map(({ name }) => name)
+
             // Filter records by the state of the find widget
             const { findWidgetQuery, findWidgetParams } = buildFindWidgetQuery(tableInfo)
+            if (reloadSchema || reloadRecordCount) { pageSnapshot = null }
+            if (generation !== reloadGeneration) { return }
             if (reloadRecordCount) {
                 const numRecords = (await remote.query(`SELECT COUNT(*) as count FROM ${subquery}${findWidgetQuery}`, findWidgetParams, "r", { withoutLogging: true })).records[0]!.count
+                if (generation !== reloadGeneration) { return }
                 if (typeof numRecords !== "bigint") { throw new Error(numRecords + "") }
                 await setPaging({ numRecords }, undefined, true)
                 state = get() // state.paging will be updated
             }
 
             // Query the database
-            const records = (await remote.query(`SELECT${hasRowId ? " rowid AS rowid," : ""} ${getVisibleColumnsSQL()} FROM ${subquery}${findWidgetQuery}${hasRowId ? " ORDER BY rowid" : ""} LIMIT ? OFFSET ?`, [...findWidgetParams, state.paging.visibleAreaSize, state.paging.visibleAreaTop], "r", { withoutLogging: true })).records
+            const delta = pageSnapshot ? state.paging.visibleAreaTop - pageSnapshot.top : 0n
+            const anchor = rowIdColumn && pageSnapshot && pageSnapshot.table === subquery && pageSnapshot.filter === findWidgetQuery && deepEqual(pageSnapshot.params, findWidgetParams) && delta > 0n && delta <= BigInt(pageSnapshot.records.length) ? pageSnapshot.records[Number(delta - 1n)]?.[rowIdColumn] : undefined
+            const useAnchor = typeof anchor === "bigint" || typeof anchor === "number"
+            const where = useAnchor ? ` WHERE ${findWidgetQuery ? `(${findWidgetQuery.slice(7)}) AND ` : ""}${escapeSQLIdentifier(rowIdColumn!)} > ?` : findWidgetQuery
+            const selectedSQL = reloadSchema ? (selectedColumns.length === tableInfo.length ? "*" : selectedColumns.map(escapeSQLIdentifier).join(", ")) : getVisibleColumnsSQL()
+            const records = (await remote.query(`SELECT${rowIdColumn ? ` ${escapeSQLIdentifier(rowIdColumn)} AS ${escapeSQLIdentifier(rowIdColumn)},` : ""} ${selectedSQL} FROM ${subquery}${where}${rowIdColumn ? ` ORDER BY ${escapeSQLIdentifier(rowIdColumn)}` : ""} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`, [...findWidgetParams, ...(useAnchor ? [anchor] : []), state.paging.visibleAreaSize, ...(useAnchor ? [] : [state.paging.visibleAreaTop])], "r", { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" })).records!
+            if (generation !== reloadGeneration) { return }
+            pageSnapshot = { table: subquery, filter: findWidgetQuery, params: findWidgetParams, top: state.paging.visibleAreaTop, records }
 
             // Update the store
             if (!reloadSchema) {
-                set({ records })
+                set({ records, rowIdColumn })
             } else {
                 if (!state.useCustomViewerQuery) {
                     const indexList = await remote.getIndexList(state.tableName!, { withoutLogging: true })
                     const autoIncrement = await remote.hasTableAutoincrementColumn(state.tableName!, { withoutLogging: true })
                     const tableSchema = await remote.getTableSchema(state.tableName!, { withoutLogging: true })
+                    const foreignKeyList = await remote.getForeignKeyList(state.tableName!, { withoutLogging: true })
+                    const indexInfo = await Promise.all(indexList.map((index) => remote.getIndexInfo(index.name, { withoutLogging: true })))
+                    const indexSchema = await Promise.all(indexList.map((index) => remote.getIndexSchema(index.name, { withoutLogging: true }).then((x) => x ?? null)))
+                    if (generation !== reloadGeneration) { return }
+                    schemaTable = state.tableName
                     set({
                         invalidQuery: null,
                         tableInfo,
-                        foreignKeyList: await remote.getForeignKeyList(state.tableName!, { withoutLogging: true }),
-                        visibleColumns: tableInfo.map(({ name }) => name),
+                        foreignKeyList,
+                        visibleColumns: selectedColumns,
                         records,
+                        rowIdColumn,
                         autoIncrement,
                         tableSchema,
                         indexList,
-                        indexInfo: await Promise.all(indexList.map((index) => remote.getIndexInfo(index.name, { withoutLogging: true }))),
-                        indexSchema: await Promise.all(indexList.map((index) => remote.getIndexSchema(index.name, { withoutLogging: true }).then((x) => x ?? null))),
+                        indexInfo,
+                        indexSchema,
                     })
                 } else {
+                    schemaTable = undefined
                     set({
                         invalidQuery: null,
                         tableInfo,
                         foreignKeyList: [],
                         visibleColumns: tableInfo.map(({ name }) => name),
                         records,
+                        rowIdColumn,
                         autoIncrement: false,
                         tableSchema: null,
                         indexList: [],
@@ -169,6 +199,7 @@ export const useTableStore = createStore("useTableStore", {
                 }
             }
         } catch (err) {
+            if (generation !== reloadGeneration) { return }
             set({ invalidQuery: typeof err === "object" && err !== null && "message" in err ? err.message + "" : err + "" })
             throw err
         }
@@ -188,19 +219,20 @@ export const useTableStore = createStore("useTableStore", {
     const listUniqueConstraints = () => {
         const uniqueConstraints: { primary: boolean, columns: string[] }[] = []
         const { tableInfo, indexList, indexInfo } = get()
-        for (const column of tableInfo) {
-            if (column.pk) {
-                uniqueConstraints.push({ primary: true, columns: [column.name] })
-            }
-        }
+        const primaryColumns = tableInfo.filter((column) => column.pk).sort((a, b) => Number(a.pk - b.pk)).map((column) => column.name)
+        if (primaryColumns.length) { uniqueConstraints.push({ primary: true, columns: primaryColumns }) }
         for (const [i, index] of indexList.entries()) {
             if (index.partial) { continue }
             if (!index.unique) { continue }
-            uniqueConstraints.push({ primary: index.origin === "pk", columns: indexInfo[i]!.map(({ name }) => name) })
+            const columns = indexInfo[i]!.map(({ name }) => name)
+            if (columns.length && columns.every((name) => typeof name === "string")) {
+                uniqueConstraints.push({ primary: index.origin === "pk", columns })
+            }
         }
         return uniqueConstraints
     }
     const setPaging = async (opts: { visibleAreaTop?: bigint, numRecords?: bigint, visibleAreaSize?: bigint }, preserveEditorState?: true, withoutTableReloading?: true) => {
+        const previousSize = get().paging.visibleAreaSize
         const paging = { ...get().paging, ...opts }
         paging.visibleAreaSize = BigintMath.max(1n, BigintMath.min(200n, paging.visibleAreaSize))
         paging.visibleAreaTop = BigintMath.max(0n, BigintMath.min(paging.numRecords - paging.visibleAreaSize + 1n, paging.visibleAreaTop))
@@ -213,7 +245,7 @@ export const useTableStore = createStore("useTableStore", {
         // Update paging before querying the database. Otherwise the scrollbar will vibrate.
         set({ paging })
 
-        await remote.setState("visibleAreaSize", Number(paging.visibleAreaSize))
+        if (paging.visibleAreaSize !== previousSize) { await remote.setState("visibleAreaSize", Number(paging.visibleAreaSize)) }
         if (!withoutTableReloading) {
             await reloadTable(false, false)
         }
@@ -269,10 +301,11 @@ export const useTableStore = createStore("useTableStore", {
         addErrorMessage: (value: string) => set((s) => ({ errorMessage: s.errorMessage + value + "\n" })),
         /** Enumerates the column tuples that uniquely select the record. */
         getRecordSelectors: (record: Record<string, remote.SQLite3Value>): string[][] => {
-            const constraintChoices = ("rowid" in record ? [["rowid"]] : [])
+            const rowIdColumn = get().rowIdColumn
+            const constraintChoices = (rowIdColumn && rowIdColumn in record ? [[rowIdColumn]] : [])
                 .concat(listUniqueConstraints().sort((a, b) => +b.primary - +a.primary)
                     .map(({ columns }) => columns)
-                    .filter((columns) => columns.every((column) => record[column] !== null)))
+                    .filter((columns) => columns.every((column) => record[column] !== null && record[column] !== undefined)))
             return [...new Set(constraintChoices.map((columns) => JSON.stringify(columns.sort((a, b) => a.localeCompare(b)))))].map((columns) => JSON.parse(columns))  // Remove duplicates
         },
         reloadAllTables: async (selectTable?: string) => {
@@ -484,6 +517,10 @@ const FindWidget = () => {
     const { value, caseSensitive, wholeWord, regex } = useTableStore((s) => s.findWidget)
     const setFindWidgetState = useTableStore((s) => s.setFindWidgetState)
     const ref = useRef<HTMLInputElement>(null)
+    const timer = useRef<ReturnType<typeof setTimeout>>()
+    const [draft, setDraft] = useState(value)
+    useEffect(() => { setDraft(value) }, [value])
+    useEffect(() => () => { clearTimeout(timer.current) }, [])
 
     // Focus the input box on mount
     useEffect(() => {
@@ -493,7 +530,7 @@ const FindWidget = () => {
 
     return <div class="inline-block pl-1 pt-1 bg-gray-200 shadow-md whitespace-nowrap sticky right-3">
         {/* Text input */}
-        <input id="findWidget" ref={ref} class="mr-1" placeholder="Find" value={value} onChange={(ev) => setFindWidgetState({ value: ev.currentTarget.value })} />
+        <input id="findWidget" ref={ref} class="mr-1" placeholder="Find" value={draft} onInput={(ev) => { const value = ev.currentTarget.value; setDraft(value); clearTimeout(timer.current); timer.current = setTimeout(() => { setFindWidgetState({ value }).catch(console.error) }, 250) }} />
 
         {/* Match Case button */}
         <Tooltip content="Match Case" ><span class={"[font-size:130%] align-middle select-none p-[2px] [border-radius:1px] inline-block cursor-pointer " + (caseSensitive ? "bg-blue-400 bg-opacity-40 text-black" : "text-gray-600 hover:bg-gray-300")} onClick={() => setFindWidgetState({ caseSensitive: !caseSensitive })}>
@@ -519,6 +556,7 @@ const TableRow = (props: { selected: boolean, readonly selectedColumn: string | 
     const tableName = useTableStore((s) => s.tableName)
     const tableInfo = useTableStore((s) => s.tableInfo)
     const visibleColumns = useTableStore((s) => s.visibleColumns)
+    const rowIdColumn = useTableStore((s) => s.rowIdColumn)
 
     const delete_ = useEditorStore((s) => s.delete_)
     const update = useEditorStore((s) => s.update)
@@ -548,7 +586,7 @@ const TableRow = (props: { selected: boolean, readonly selectedColumn: string | 
                     }}>Delete…</button>
                     <hr />
                     <button onClick={() => navigator.clipboard.writeText(props.rowNumber + "")}>Copy Row Number</button>
-                    <button onClick={() => navigator.clipboard.writeText(props.record.rowid + "")}>Copy Rowid</button>
+                    {rowIdColumn && <button onClick={() => navigator.clipboard.writeText(props.record[rowIdColumn] + "")}>Copy Rowid</button>}
                 </>)
             }}
             data-testid={`row number ${props.rowNumber}`}>{props.rowNumber}</td>
@@ -718,20 +756,24 @@ export const CellValue = ({ value }: { value: remote.SQLite3Value }) => {
     useEffect(() => {
         if (!(value instanceof Uint8Array)) { return }
         let unmounted = false
+        let objectUrl: string | undefined
         fileTypeFromBuffer(value).then((result) => {
             if (!result || unmounted) { return }
             const type = result.mime
             if (type.startsWith("image/")) {
-                setContent({ value, node: <img class="h-max-[200px]" src={URL.createObjectURL(new Blob([value], { type }))}></img> })
+                objectUrl = URL.createObjectURL(new Blob([value], { type }))
+                setContent({ value, node: <img class="h-max-[200px]" src={objectUrl}></img> })
             } else if (type.startsWith("audio/")) {
-                setContent({ value, node: <audio class="h-[19px] w-[80%]" controls src={URL.createObjectURL(new Blob([value], { type }))}></audio> })
+                objectUrl = URL.createObjectURL(new Blob([value], { type }))
+                setContent({ value, node: <audio class="h-[19px] w-[80%]" controls src={objectUrl}></audio> })
             } else if (type.startsWith("video/")) {
-                setContent({ value, node: <video class="h-max-[200px]" controls src={URL.createObjectURL(new Blob([value], { type }))}></video> })
+                objectUrl = URL.createObjectURL(new Blob([value], { type }))
+                setContent({ value, node: <video class="h-max-[200px]" controls src={objectUrl}></video> })
             } else {
                 setContent({ value, node: <span class="text-[var(--data-null)]">{type}: {`x'${blob2hex(value, 8)}'`}</span> })
             }
         }).catch(console.error)
-        return () => { unmounted = true }
+        return () => { unmounted = true; if (objectUrl) { URL.revokeObjectURL(objectUrl) } }
     }, [value])
     if (content.value === value && content.node) {
         return <>{content.node}</>
@@ -751,7 +793,7 @@ export const CellValue = ({ value }: { value: remote.SQLite3Value }) => {
 /** https://stackoverflow.com/a/6701665/10710682, https://stackoverflow.com/a/51574648/10710682 */
 export const escapeSQLIdentifier = (ident: string) => {
     if (ident.includes("\x00")) { throw new Error("Invalid identifier") }
-    return ident.includes('"') || /[^A-Za-z0-9_\$]/.test(ident) ? `"${ident.replaceAll('"', '""')}"` : ident
+    return `"${ident.replaceAll('"', '""')}"`
 }
 
 export const blob2hex = (blob: Uint8Array, maxLength?: number) =>

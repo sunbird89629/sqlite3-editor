@@ -13,6 +13,8 @@ const packr = new Packr({ useRecords: false, preserveNumericTypes: true })
 const unpackr = new Unpackr({ largeBigIntToFloat: false, int64AsNumber: false, mapsAsObjects: true, useRecords: true, preserveNumericTypes: true })
 
 const vscode = window.acquireVsCodeApi?.()
+export const isVSCode = vscode !== undefined
+export const openNativeQuery = (tableName: string) => post("/openNativeQuery", { tableName })
 
 const queue: { start: number }[] = []
 
@@ -26,7 +28,7 @@ const loop = () => {
 }
 loop()
 
-type PostOptions = { withoutLogging?: boolean }
+type PostOptions = { withoutLogging?: boolean, coalesceKey?: string }
 
 /** Send the data to the server with fetch(), or to the extension host with vscode.postMessage(). */
 export const post = async (url: string, body: unknown, opts: PostOptions = {}) => {
@@ -35,9 +37,13 @@ export const post = async (url: string, body: unknown, opts: PostOptions = {}) =
     if (vscode !== undefined) {
         return new Promise<unknown>((resolve, reject) => {
             const requestId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)
-            vscode.postMessage({ requestId, path: url, body: packr.pack(body) })
+            const timeout = window.setTimeout(() => {
+                window.removeEventListener("message", callback)
+                reject(new Error("Database request timed out; a write may still have completed."))
+            }, 120000)
             const callback = ({ data }: Message) => {
                 if (data.type !== "sqlite3-editor-server" || data.requestId !== requestId) { return }
+                window.clearTimeout(timeout)
                 window.removeEventListener("message", callback)
                 if ("err" in data) {
                     if (!opts.withoutLogging) { useTableStore.getState().addErrorMessage(data.err) }
@@ -47,6 +53,7 @@ export const post = async (url: string, body: unknown, opts: PostOptions = {}) =
                 resolve(unpackr.unpack(data.body))
             }
             window.addEventListener("message", callback)
+            vscode.postMessage({ requestId, path: url, body: packr.pack(body), coalesceKey: opts.coalesceKey })
         }).finally(() => {
             queue.splice(queue.indexOf(id)!, 1)
         })
@@ -111,6 +118,24 @@ export const export_ = (filepath: string, data: Uint8Array, opts: PostOptions = 
 /** Opens an integrated terminal and types the text. */
 export const openTerminal = async (text: string, opts: PostOptions = {}) => {
     await post("/openTerminal", { text }, opts)
+}
+
+export const openQueryFile = async (): Promise<{ name: string, content: string } | null> => {
+    if (vscode) { return post("/openQueryFile", {}) as Promise<{ name: string, content: string } | null> }
+    return new Promise((resolve) => {
+        const input = document.createElement("input")
+        input.type = "file"; input.accept = ".sql,text/plain"
+        input.onchange = async () => { const file = input.files?.[0]; resolve(file ? { name: file.name, content: await file.text() } : null) }
+        input.oncancel = () => resolve(null)
+        input.click()
+    })
+}
+export const saveQueryFile = async (content: string): Promise<string | null> => {
+    if (vscode) { return post("/saveQueryFile", { content }) as Promise<string | null> }
+    const url = URL.createObjectURL(new Blob([content], { type: "text/sql" }))
+    const link = document.createElement("a"); link.href = url; link.download = "query.sql"; link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    return "query.sql"
 }
 
 /** https://stackoverflow.com/a/1604121/10710682 */

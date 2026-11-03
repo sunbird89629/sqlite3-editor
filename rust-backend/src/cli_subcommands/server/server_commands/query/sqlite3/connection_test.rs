@@ -43,6 +43,25 @@ fn test_execute_params() {
 }
 
 #[test]
+fn test_paged_query_executes_pre_statement() {
+    let mut db = SQLite3Connection::connect(":memory:", false).unwrap();
+    let options = QueryOptions {
+        pre_stmt: Some("CREATE TEMP TABLE staged AS SELECT ? AS value, ? AS other".to_string()),
+        ..Default::default()
+    };
+    let result = db
+        ._execute(
+            "SELECT value FROM staged LIMIT ? OFFSET ?",
+            &[1.into(), 0.into()],
+            ExecMode::ReadWrite,
+            options,
+            &mut vec![],
+        )
+        .unwrap();
+    assert_eq!(decode_msgpack_into_json(result), r#"{"value":[1]}"#);
+}
+
+#[test]
 fn test_values() {
     let mut db = SQLite3Connection::connect(":memory:", false).unwrap();
     assert_eq!(

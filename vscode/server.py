@@ -10,7 +10,8 @@ from umsgpack import pack, unpack
 
 def find_widget_regexp(text: str, pattern: str, whole_word: int, case_sensitive: int):
     try:
-        return 0 if re.search(pattern, "\\b(?:{pattern})\\b" if whole_word else text, 0 if case_sensitive else re.RegexFlag.I) is None else 1
+        pattern = r"\b(?:" + pattern + r")\b" if whole_word else pattern
+        return 0 if re.search(pattern, str(text), 0 if case_sensitive else re.IGNORECASE) is None else 1
     except re.error:  # Invalid regular expressions
         return 0
 

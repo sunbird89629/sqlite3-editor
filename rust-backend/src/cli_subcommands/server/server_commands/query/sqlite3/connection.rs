@@ -14,6 +14,8 @@ use crate::cli_subcommands::server::sqlite3_fns::list_references::list_reference
 use crate::cli_subcommands::server::sqlite3_fns::list_tables::list_tables;
 use crate::cli_subcommands::server::sqlite3_fns::query_schema::query_schema;
 use crate::cli_subcommands::server::sqlite3_fns::table_schema::table_schema;
+use crate::cli_subcommands::server::sqlite3_query_parser::split_statements::split_sqlite_statements;
+use crate::cli_subcommands::server::sqlite3_query_parser::token::SQLite3Token;
 use crate::cli_value::CLIValue;
 use crate::msgpack::encode_value_ref_into_msgpack;
 use crate::msgpack::MessagePackRecord;
@@ -51,12 +53,6 @@ impl SQLite3Connection {
 
         // Register custom SQLite functions
         register_sqlite_functions_for_find_widget(&con)?;
-
-        // Allow loading extensions
-        unsafe {
-            con.load_extension_enable()
-                .expect("Failed to enable loading run-time loadable extensions.");
-        }
 
         let database_label = format!("sqlite {}", rusqlite::version());
 
@@ -187,16 +183,66 @@ impl SQLite3Connection {
         options: QueryOptions,
         warnings: &mut Vec<InvalidUTF8>,
     ) -> std::result::Result<Vec<u8>, CLIError> {
+        // prepare() silently ignores SQL after the first statement. Reject it
+        // before executing anything; Script mode has its own explicit path.
+        if query.contains(';') {
+            let (statements, dot_commands) = match split_sqlite_statements(query) {
+                Ok(value) => value,
+                Err(_) => return CLIError::new_other_error("Unable to parse SQL statement.", Some(query.to_owned()), Some(params)),
+            };
+            let nonempty = statements
+                .iter()
+                .filter(|stmt| {
+                    stmt.real_tokens
+                        .iter()
+                        .any(|t| !t.value.is_whitespace() && t.value != SQLite3Token::SemiColon)
+                })
+                .count();
+            if nonempty > 1 || !dot_commands.is_empty() {
+                return CLIError::new_other_error(
+                    "Only one SQL statement can be executed at a time.",
+                    Some(query.to_owned()),
+                    Some(params),
+                );
+            }
+        }
         if read_only == ExecMode::ReadOnly {
             assert_readonly_query(query, &options.pre_stmt)?;
+            let statement = self
+                .con
+                .prepare(query)
+                .or_else(|err| CLIError::new_query_error(err, query, params))?;
+            // SQLite marks the argument-free journal_mode pragma as writable,
+            // although reading the current mode is supported by the old editor.
+            let read_journal_mode = query
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .eq_ignore_ascii_case("PRAGMA journal_mode");
+            if !statement.readonly() && !read_journal_mode {
+                return CLIError::new_other_error(
+                    "This query is not allowed in the read-only mode.",
+                    Some(query.to_owned()),
+                    Some(params),
+                );
+            }
         } else {
             self.pager.clear_cache();
         }
 
-        let records = if let Some(records) = self
-            .pager
-            .query(&mut self.con, query, params, |err| warnings.push(err.with(query)))?
+        // The pager does not execute pre-statements or enforce write/placeholder
+        // options. Use it only for ordinary read-only queries.
+        let cached_records = if read_only == ExecMode::ReadOnly
+            && options.pre_stmt.is_none()
+            && options.changes.is_none()
+            && options.check_placeholders.is_none()
         {
+            self.pager
+                .query(&mut self.con, query, params, |err| warnings.push(err.with(query)))?
+        } else {
+            None
+        };
+        let records = if let Some(records) = cached_records {
             // Return the cache entry if it exists.
             records
         } else {
@@ -324,9 +370,14 @@ impl SQLite3Connection {
     }
 
     pub fn load_extensions(&self, extensions: &[&str]) -> std::result::Result<(), CLIError> {
-        for ext in extensions {
-            unsafe {
-                self.con.load_extension(ext, None).or_else(|err| {
+        unsafe {
+            self.con
+                .load_extension_enable()
+                .or_else(|err| CLIError::new_ffi_error(err, "sqlite3_enable_load_extension", &[]))?;
+        }
+        let result = (|| {
+            for ext in extensions {
+                unsafe { self.con.load_extension(ext, None) }.or_else(|err| {
                     CLIError::new_ffi_error(
                         err,
                         "sqlite3_load_extension",
@@ -334,8 +385,13 @@ impl SQLite3Connection {
                     )
                 })?;
             }
-        }
-        Ok(())
+            Ok(())
+        })();
+        let disable = self
+            .con
+            .load_extension_disable()
+            .or_else(|err| CLIError::new_ffi_error(err, "sqlite3_enable_load_extension", &[]));
+        result.and(disable)
     }
 
     #[cfg(test)]

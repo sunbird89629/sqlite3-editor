@@ -4,6 +4,7 @@ import license from "rollup-plugin-license"
 import path from "path"
 
 export default defineConfig({
+    resolve: { alias: { "node:buffer": "buffer" } },
     plugins: [
         preact(),
 

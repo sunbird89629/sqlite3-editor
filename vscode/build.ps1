@@ -11,4 +11,7 @@ cd "$script_dir"
 Copy-Item "../ui/dist" "./webview" -Recurse
 
 # Build ./extension.ts
-npx esbuild extension.ts --bundle --outfile=extension.js --target=esnext --format=cjs --platform=node --minify --external:vscode
+node build-extension.cjs --minify
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node build-rust.cjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -197,12 +197,14 @@ export const useEditorStore = createStore("useEditorStore", {
 
     /** Switches the editor to the DELETE editor. */
     const delete_ = async (tableName: string, record: Record<string, remote.SQLite3Value>, row: number) => {
+        const constraintChoices = useTableStore.getState().getRecordSelectors(record)
+        if (!constraintChoices.length) { return }
         unmountInput?.()
         set({
             statement: "DELETE",
             tableName,
             record,
-            constraintChoices: useTableStore.getState().getRecordSelectors(record),
+            constraintChoices,
             selectedConstraint: 0,
             row,
         })
@@ -340,7 +342,7 @@ export const useEditorStore = createStore("useEditorStore", {
         if (opts.reload === "allTables") {
             await useTableStore.getState().reloadAllTables(opts.selectTable)
         } else {
-            await useTableStore.getState().reloadTable(true, true)
+            await useTableStore.getState().reloadTable(false, true)
             if (opts.scrollToBottom) {
                 let state = useTableStore.getState()
                 await state.setPaging({ visibleAreaTop: BigintMath.max(state.paging.numRecords - state.paging.visibleAreaSize + 1n, 0n) })
@@ -356,7 +358,7 @@ export const useEditorStore = createStore("useEditorStore", {
             case "UPDATE": {
                 const columns = s.constraintChoices[s.selectedConstraint]!
                 return [
-                    `UPDATE ${escapeSQLIdentifier(s.tableName)} SET ${escapeSQLIdentifier(s.column)} = ? WHERE ${columns.map((column) => `${column} = ?`).join(" AND ")}`,
+                    `UPDATE ${escapeSQLIdentifier(s.tableName)} SET ${escapeSQLIdentifier(s.column)} = ? WHERE ${columns.map((column) => `${escapeSQLIdentifier(column)} = ?`).join(" AND ")}`,
                     [parseTextareaValue(s.textareaValue, s.blobValue, s.type), ...columns.map((column) => s.record[column] as remote.SQLite3Value)],
                     { reload: "currentTable" },
                 ]
@@ -367,7 +369,7 @@ export const useEditorStore = createStore("useEditorStore", {
                     s.dataTypes.every((d) => d === "default") ?
                         `INSERT INTO ${escapeSQLIdentifier(s.tableName)} DEFAULT VALUES` :
                         `INSERT INTO ${escapeSQLIdentifier(s.tableName)} (${s.tableInfo.filter(filterDefaults).map(({ name }) => name).map(escapeSQLIdentifier).join(", ")}) VALUES (${s.tableInfo.filter(filterDefaults).map(() => "?").join(", ")})`,
-                    s.textareaValues.filter(filterDefaults).map((value, i) => parseTextareaValue(value, s.blobValues[i]!, s.dataTypes[i]!)),
+                    s.textareaValues.map((value, i) => ({ value, blob: s.blobValues[i]!, type: s.dataTypes[i]! })).filter(({ type }) => type !== "default").map(({ value, blob, type }) => parseTextareaValue(value, blob, type)),
                     { reload: "currentTable", scrollToBottom: true },
                 ]
             }
@@ -386,7 +388,7 @@ export const useEditorStore = createStore("useEditorStore", {
             case "DELETE": {
                 const columns = s.constraintChoices[s.selectedConstraint]!
                 return [
-                    `DELETE FROM ${escapeSQLIdentifier(s.tableName)} WHERE ${columns.map((column) => `${column} = ?`).join(" AND ")}`,
+                    `DELETE FROM ${escapeSQLIdentifier(s.tableName)} WHERE ${columns.map((column) => `${escapeSQLIdentifier(column)} = ?`).join(" AND ")}`,
                     [...columns.map((column) => s.record[column] as remote.SQLite3Value)],
                     { reload: "currentTable" },
                 ]
@@ -627,18 +629,24 @@ export const Editor = () => {
                     })}
                 </ul>
                 <Commit class="mt-2" query={query[0]} onClick={() => {
-                    state.commit(...query).catch(console.error)
+                    const current = useEditorStore.getState()
+                    current.commit(...current.buildQuery()).catch(console.error)
                 }} />
             </>
             break
         }
         case "UPDATE": {
-            header = <>
-                <Highlight data-testid="UPDATE">UPDATE </Highlight>
-                {escapeSQLIdentifier(state.tableName)} SET {escapeSQLIdentifier(state.column)} = ? WHERE <select value={state.selectedConstraint} class="pl-1" onChange={(ev) => { useEditorStore.setState({ selectedConstraint: +ev.currentTarget.value }) }}>{
-                    state.constraintChoices.map((columns, i) => <option value={i}>{columns.map((column) => `${column} = ${unsafeEscapeValue(state.record[column] as remote.SQLite3Value)}`).join(" AND ")}</option>)
-                }</select>
-            </>
+            header = <span class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span>
+                    <Highlight data-testid="UPDATE">UPDATE </Highlight>
+                    {escapeSQLIdentifier(state.tableName)} SET {escapeSQLIdentifier(state.column)} = ? WHERE <select value={state.selectedConstraint} class="pl-1" onChange={(ev) => { useEditorStore.setState({ selectedConstraint: +ev.currentTarget.value }) }}>{
+                        state.constraintChoices.map((columns, i) => <option value={i}>{columns.map((column) => `${column} = ${unsafeEscapeValue(state.record[column] as remote.SQLite3Value)}`).join(" AND ")}</option>)
+                    }</select>
+                </span>
+                <span class="ml-auto whitespace-nowrap">
+                    {"AS "}<DataTypeInput value={state.type} onChange={(type) => { useEditorStore.setState({ type }); mountInput() }} />
+                </span>
+            </span>
             const query = state.buildQuery()
             editor = <>
                 <DataEditor
@@ -651,8 +659,6 @@ export const Editor = () => {
                     onBlobValueChange={(value) => useEditorStore.setState({ blobValue: value })}
                     onTypeChange={(type) => { useEditorStore.setState({ type }) }}
                 />
-                {"AS "}
-                <DataTypeInput value={state.type} onChange={(type) => { useEditorStore.setState({ type }); mountInput() }} />
                 <div class="mt-2">
                     <Commit query={query[0]} onClick={() => { state.commit(...query).catch(console.error) }} />
                     <Cancel />

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from server import Server
+from server import Server, find_widget_regexp
 from umsgpack import packb, unpackb
 
 test_dir = Path(__file__).parent/"_test_files"
@@ -69,3 +69,9 @@ def test_blob():
     response = unpackb(res.read_bytes())["records"][0]["value"]
     assert response == value
     assert type(response) == bytes
+
+def test_regexp_whole_word():
+    assert find_widget_regexp("hello world", "hello", 1, 1) == 1
+    assert find_widget_regexp("helloworld", "hello", 1, 1) == 0
+    assert find_widget_regexp("HELLO world", "hello", 1, 0) == 1
+    assert find_widget_regexp("hello", "[", 1, 1) == 0

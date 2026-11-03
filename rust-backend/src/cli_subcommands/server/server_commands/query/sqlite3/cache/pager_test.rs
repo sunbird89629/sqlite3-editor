@@ -216,6 +216,17 @@ fn test_negative_limit() {
 }
 
 #[test]
+fn test_large_limit_falls_back_without_panicking() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute("CREATE TABLE t(x)", ()).unwrap();
+    let mut pager = Pager::new();
+    assert_eq!(
+        pager.query(&mut conn, "SELECT * FROM t LIMIT ? OFFSET ?", &[i64::MAX.into(), 0.into()], |_| {}),
+        Ok(None)
+    );
+}
+
+#[test]
 fn test_negative_offset() {
     let f = NamedTempFile::new().unwrap();
 
