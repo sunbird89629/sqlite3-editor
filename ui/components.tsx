@@ -78,13 +78,13 @@ export const persistentUseState = <T extends unknown>(key: string, defaultValue:
 export const Tooltip = (props: { content: string, children: preact.ComponentChildren }) =>
     <Tippy arrow={false} content={props.content} animation={false} placement={"left"}>{props.children as ReactElement}</Tippy>
 
-export const SVGOnlyCheckbox = (props: { icon: string, checked?: boolean, onClick: (checked: boolean, ev: MouseEvent) => void, class?: string, title: string, "data-testid"?: string }) => {
+export const SVGOnlyCheckbox = (props: { icon: string, checked?: boolean, onClick: (checked: boolean, ev: MouseEvent) => void, class?: string, title: string, label?: string, "data-testid"?: string }) => {
     return <Tooltip content={props.title}>
-        <span class={"align-middle select-none px-1 [border-radius:1px] inline-block cursor-pointer " + (props.checked ? "bg-gray-300 " : "hover:bg-gray-300 active:bg-inherit ") + (props.class ?? "")}
+        <button type="button" aria-label={props.title} aria-pressed={props.checked} title={props.title} class={"align-middle select-none px-2 py-1 [border-radius:1px] inline-block cursor-pointer focus:outline focus:outline-2 focus:outline-blue-300 " + (props.checked ? "bg-gray-300 " : "hover:bg-gray-300 active:bg-inherit ") + (props.class ?? "")}
             onClick={(ev) => props.onClick(!props.checked, ev)}
             data-testid={props["data-testid"]}>
-            <svg class="inline w-[1em] h-[1em]"><use xlinkHref={props.icon} /></svg>
-        </span>
+            <svg aria-hidden="true" class="inline w-[1em] h-[1em]"><use xlinkHref={props.icon} /></svg>{props.label && <span class="ml-1">{props.label}</span>}
+        </button>
     </Tooltip>
 }
 

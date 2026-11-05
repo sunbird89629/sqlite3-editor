@@ -56,9 +56,9 @@ body.dark, body.vscode-dark, body.vscode-high-contrast:not(.vscode-high-contrast
 }
 
 body {
-    @apply bg-gray-100 text-black h-[100vh] [font-size:12px] overflow-x-hidden select-none;
+    @apply bg-gray-100 text-black h-[100vh] [font-size:var(--vscode-font-size,13px)] overflow-x-hidden select-none;
     padding: 0 !important; // Override the VSCode's default
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
+    font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace);
 }
 
 h2 {
@@ -268,3 +268,6 @@ dialog::backdrop {
 dialog {
     @apply text-black;
 }
+
+.more-actions button { display: block; width: 100%; text-align: left; padding: 6px 8px; }
+.more-actions button::after { content: attr(aria-label); margin-left: 8px; }

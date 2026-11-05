@@ -160,7 +160,7 @@ const App = () => {
                 {/* SELECT * FROM ... */}
                 {!useCustomViewerQuery && <>
                     <Highlight>SELECT </Highlight>
-                    <span class="px-2 cursor-pointer hover:bg-gray-300 border-b-[1px] border-b-gray-500" onClick={() => { columnSelectDialogRef.current?.showModal() }}>{visibleColumnsSQL}</span>
+                    <button type="button" aria-label="Select visible columns" class="px-2 cursor-pointer hover:bg-gray-300 border-b-[1px] border-b-gray-500 focus:outline focus:outline-2" onClick={() => { columnSelectDialogRef.current?.showModal() }}>{visibleColumnsSQL}</button>
                     <Highlight> FROM </Highlight>
                     {tableName === undefined ? <>No tables</> : <Select
                         value={tableName}
@@ -195,9 +195,13 @@ const App = () => {
 
                 {/* Buttons placed right after the table name */}
                 <div class="my-2">
+                    <Button class="mr-2" onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
                     {/* Schema */}
-                    {!useCustomViewerQuery && <SVGOnlyCheckbox icon={isSettingsViewOpen ? "#close" : "#settings-gear"} title="Show Table Schema and Indexes" checked={isSettingsViewOpen} onClick={() => setIsSettingsViewOpen(!isSettingsViewOpen)} data-testid="schema-button"></SVGOnlyCheckbox>}
+                    {!useCustomViewerQuery && <SVGOnlyCheckbox icon={isSettingsViewOpen ? "#close" : "#settings-gear"} title="Show Table Schema and Indexes" label="Schema" checked={isSettingsViewOpen} onClick={() => setIsSettingsViewOpen(!isSettingsViewOpen)} data-testid="schema-button"></SVGOnlyCheckbox>}
 
+                    <details class="inline-block relative mr-2 align-middle">
+                        <summary class="cursor-pointer px-2 py-1 bg-gray-200 focus:outline focus:outline-2">More actions</summary>
+                        <div class="more-actions absolute z-50 min-w-[220px] p-2 bg-white border border-gray-400 shadow-lg">
                     {/* Drop Table */}
                     {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#trash" title="Drop Table" checked={editorStatement === "DROP TABLE"} onClick={(checked) => {
                         if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
@@ -228,13 +232,13 @@ const App = () => {
                         useEditorStore.getState().createIndex(tableName)
                     }} data-testid="create-index-button"></SVGOnlyCheckbox>}
 
-                    {/* Custom Query button */}
-                    <Button class="mr-2" onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
                     <SVGOnlyCheckbox icon="#terminal" title="Custom Query" checked={editorStatement === "Custom Query"} onClick={(checked) => {
                         if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
                         useEditorStore.getState().custom(tableName)
                     }} data-testid="custom-query-button"></SVGOnlyCheckbox>
 
+                        </div>
+                    </details>
                     {/* Tools */}
                     <SVGOnlyCheckbox icon="#tools" title="Other Tools" onClick={(_, ev) => {
                         renderContextmenu(ev, <>
@@ -264,7 +268,7 @@ const App = () => {
                     }}></SVGOnlyCheckbox>
 
                     {/* Find */}
-                    {isTableRendered && !isSettingsViewOpen && <SVGOnlyCheckbox icon="#search" title="Find (Ctrl+f)" checked={isFindWidgetVisible} onClick={(checked) => {
+                    {isTableRendered && !isSettingsViewOpen && <SVGOnlyCheckbox icon="#search" title="Find (Ctrl+f)" label="Find" checked={isFindWidgetVisible} onClick={(checked) => {
                         useTableStore.getState().setFindWidgetVisibility(checked).catch(console.error)
                     }} data-testid="find-button"></SVGOnlyCheckbox>}
                 </div>

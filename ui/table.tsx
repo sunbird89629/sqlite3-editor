@@ -613,6 +613,7 @@ const TableRow = (props: { selected: boolean, readonly selectedColumn: string | 
                     if (input?.textarea && !input.textarea.classList.contains("single-click")) { return }  // if the in-place input is visible
                     renderContextmenu(ev, <>
                         <button onClick={onMouseDown}>Update</button>
+                        {remote.isVSCode && typeof value === "string" && <button onClick={() => remote.openCellInEditor(value, name, tableName, `row ${props.rowNumber}`, "saved").catch(console.error)}>Preview Saved Value in Editor</button>}
                         <hr />
                         <button onClick={() => {
                             if (value instanceof Uint8Array) {  // BLOB

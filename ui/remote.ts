@@ -14,7 +14,9 @@ const unpackr = new Unpackr({ largeBigIntToFloat: false, int64AsNumber: false, m
 
 const vscode = window.acquireVsCodeApi?.()
 export const isVSCode = vscode !== undefined
-export const openNativeQuery = (tableName: string) => post("/openNativeQuery", { tableName })
+export const openNativeQuery = (tableName: string | undefined) => post("/openNativeQuery", { tableName })
+/** Opens a read-only snapshot of the current text in VS Code. */
+export const openCellInEditor = (content: string, column: string, table?: string, row?: string, source: "draft" | "saved" = "draft") => post("/openCellInEditor", { content, column, table, row, source })
 
 const queue: { start: number }[] = []
 
@@ -39,7 +41,9 @@ export const post = async (url: string, body: unknown, opts: PostOptions = {}) =
             const requestId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)
             const timeout = window.setTimeout(() => {
                 window.removeEventListener("message", callback)
-                reject(new Error("Database request timed out; a write may still have completed."))
+                const message = "Request timed out; a database write may still have completed."
+                if (!opts.withoutLogging) { useTableStore.getState().addErrorMessage(message) }
+                reject(new Error(message))
             }, 120000)
             const callback = ({ data }: Message) => {
                 if (data.type !== "sqlite3-editor-server" || data.requestId !== requestId) { return }

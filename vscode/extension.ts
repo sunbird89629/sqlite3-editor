@@ -6,6 +6,8 @@ import path from "path"
 import which from "which"
 import { Packr, Unpackr } from "msgpackr"
 import os from "os"
+import { randomUUID } from "crypto"
+import { applyEdits, format, parse, ParseError } from "jsonc-parser/lib/esm/main"
 import { registerQueryEditor } from "./native-query-editor"
 export { registerQueryEditor } from "./native-query-editor"
 
@@ -218,7 +220,12 @@ const findPython = async () => {
 export const activate = (context: vscode.ExtensionContext) => {
     let terminal: vscode.Terminal | undefined
     const queryEditor = registerQueryEditor(context)
+    const cellSnapshots = new Map<string, string>()
     context.subscriptions.push(
+        vscode.workspace.registerTextDocumentContentProvider("sqlite-editor-cell", {
+            provideTextDocumentContent: (uri) => cellSnapshots.get(uri.toString()) ?? "",
+        }),
+        vscode.workspace.onDidCloseTextDocument((doc) => { if (doc.uri.scheme === "sqlite-editor-cell") { cellSnapshots.delete(doc.uri.toString()) } }),
         {
             dispose: () => {
                 terminal?.dispose()
@@ -318,6 +325,21 @@ export const activate = (context: vscode.ExtensionContext) => {
                             break
                         } case "/downloadState": {
                             res.send(packr.pack(Object.fromEntries(context.workspaceState.keys().map((key) => [key, context.workspaceState.get(key)]))))
+                            break
+                        } case "/openCellInEditor": {
+                            const { content, column, table, row, source } = unpackr.unpack(body) as { content: unknown, column: unknown, table?: string, row?: string, source?: string }
+                            if (typeof content !== "string" || typeof column !== "string") { res.status(400).send("Invalid cell content"); break }
+                            const errors: ParseError[] = []
+                            parse(content, errors, { disallowComments: true, allowTrailingComma: false })
+                            const isJSON = content.trim().length > 0 && errors.length === 0
+                            const text = isJSON ? applyEdits(content, format(content, undefined, { insertSpaces: true, tabSize: 2 })) : content
+                            const name = [table, row, column, source === "saved" ? "saved snapshot" : "draft snapshot"].filter(Boolean).join(" · ").replace(/[\\/\x00-\x1f:*?"<>|]/g, "_").slice(0, 160) || "cell snapshot"
+                            const uri = vscode.Uri.from({ scheme: "sqlite-editor-cell", path: `/${randomUUID()}/${name}.${isJSON ? "json" : "txt"}` })
+                            cellSnapshots.set(uri.toString(), text)
+                            vscode.workspace.openTextDocument(uri).then((doc) => vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: false })).then(
+                                () => res.send(packr.pack(null)),
+                                (err) => { cellSnapshots.delete(uri.toString()); res.status(400).send((err as Error).message) },
+                            )
                             break
                         } case "/openNativeQuery": {
                             const { tableName } = unpackr.unpack(body) as { tableName?: string }

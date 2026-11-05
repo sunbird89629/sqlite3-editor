@@ -10,15 +10,19 @@ const encode = (value) => {
     try { return packr.pack(value) } finally { Buffer.prototype.utf8Write = utf8Write }
 }
 let savedFile
+let cellProvider
+let shownDocument
+const closeDocument = []
 const originalLoad = Module._load
 let provider
 const vscode = {
     EventEmitter: class { event() {} fire() {} dispose() {} },
-    Uri: { joinPath: (_, ...parts) => ({ toString: () => parts.join('/') }), file: (fsPath) => ({ fsPath }) },
-    workspace: { textDocuments: [], onDidChangeTextDocument: () => ({}), onDidOpenTextDocument: () => ({}), onDidCloseTextDocument: () => ({}), fs: { readFile: async (uri) => Buffer.from(uri.fsPath ? 'SELECT 42' : '<html></html>'), writeFile: async (uri, data) => { savedFile = { uri, content: Buffer.from(data).toString('utf8') } } } },
+    Uri: { joinPath: (_, ...parts) => ({ toString: () => parts.join('/') }), file: (fsPath) => ({ fsPath }), from: (parts) => ({ ...parts, toString: () => `${parts.scheme}:${parts.path}` }) },
+    ViewColumn: { Beside: 2 },
+    workspace: { textDocuments: [], onDidChangeTextDocument: () => ({}), onDidOpenTextDocument: () => ({}), onDidCloseTextDocument: (callback) => { closeDocument.push(callback); return {} }, registerTextDocumentContentProvider: (_, value) => { cellProvider = value; return {} }, openTextDocument: async (uri) => ({ uri, text: cellProvider.provideTextDocumentContent(uri) }), fs: { readFile: async (uri) => Buffer.from(uri.fsPath ? 'SELECT 42' : '<html></html>'), writeFile: async (uri, data) => { savedFile = { uri, content: Buffer.from(data).toString('utf8') } } } },
     commands: { registerCommand: () => ({}) },
-    languages: { createDiagnosticCollection: () => ({ dispose() {} }), registerCodeLensProvider: () => ({}), registerCompletionItemProvider: () => ({}) },
-    window: { registerCustomEditorProvider: (_, value) => { provider = value; return { dispose() {} } }, showSaveDialog: async () => ({ fsPath: '/tmp/query.sql' }), showOpenDialog: async () => [{ fsPath: '/tmp/query.sql' }] },
+    languages: { createDiagnosticCollection: () => ({ delete() {}, dispose() {} }), registerCodeLensProvider: () => ({}), registerCompletionItemProvider: () => ({}) },
+    window: { registerCustomEditorProvider: (_, value) => { provider = value; return { dispose() {} } }, showTextDocument: async (doc, opts) => { shownDocument = { doc, opts } }, showSaveDialog: async () => ({ fsPath: '/tmp/query.sql' }), showOpenDialog: async () => [{ fsPath: '/tmp/query.sql' }] },
 }
 Module._load = function (request, ...args) {
     return request === 'vscode' ? vscode : originalLoad.call(this, request, ...args)
@@ -51,6 +55,19 @@ async function main() {
     handler({ requestId: 3, path: '/openQueryFile', body: encode({}) })
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(unpackr.unpack(messages[2].body).content, 'SELECT 42')
+    const json = '{"n":9223372036854775807,"n":2,"text":"中文"}'
+    handler({ requestId: 4, path: '/openCellInEditor', body: encode({ content: json, column: 'payload' }) })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.match(shownDocument.doc.uri.path, /payload · draft snapshot\.json$/)
+    assert.equal(shownDocument.doc.text, '{\n  "n": 9223372036854775807,\n  "n": 2,\n  "text": "中文"\n}')
+    assert.equal(shownDocument.opts.viewColumn, vscode.ViewColumn.Beside)
+    const uri = shownDocument.doc.uri
+    closeDocument.forEach((callback) => callback({ uri }))
+    assert.equal(cellProvider.provideTextDocumentContent(uri), '')
+    handler({ requestId: 5, path: '/openCellInEditor', body: encode({ content: '{ broken JSON', column: 'bad/path' }) })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.match(shownDocument.doc.uri.path, /bad_path · draft snapshot\.txt$/)
+    assert.equal(shownDocument.doc.text, '{ broken JSON')
     console.log('workspace state message encoded successfully')
 }
 main().catch((err) => { console.error(err); process.exitCode = 1 })

@@ -336,8 +336,13 @@ export const useEditorStore = createStore("useEditorStore", {
             await discardChanges()
         }
 
-        // Query
-        await remote.query(query, params, "w+")
+        // Restore the dirty flag if the write fails so the draft remains recoverable.
+        try {
+            await remote.query(query, params, "w+")
+        } catch (error) {
+            if (get().statement === "UPDATE") { setPartial({ isTextareaDirty: true }) }
+            throw error
+        }
 
         if (opts.reload === "allTables") {
             await useTableStore.getState().reloadAllTables(opts.selectTable)
@@ -493,6 +498,7 @@ export type OnWriteOptions = {
 
 export const Editor = () => {
     const state = useEditorStore()
+    const [expanded, setExpanded] = useState(false)
 
     useLayoutEffect(() => {
         if (state.statement !== "UPDATE") { return }
@@ -644,14 +650,25 @@ export const Editor = () => {
                     }</select>
                 </span>
                 <span class="ml-auto whitespace-nowrap">
-                    {"AS "}<DataTypeInput value={state.type} onChange={(type) => { useEditorStore.setState({ type }); mountInput() }} />
+                    {"Type "}<DataTypeInput value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); mountInput() }} />
                 </span>
+                <span class="text-gray-500" role="status">{state.isTextareaDirty ? "● Unsaved" : "● Saved"}</span>
             </span>
             const query = state.buildQuery()
             editor = <>
+                <div class="flex flex-wrap items-center">
+                    <Commit disabled={!state.isTextareaDirty} query={query[0]} onClick={() => { state.commit(...query).catch(console.error) }} />
+                    <Cancel />
+                    {remote.isVSCode && state.type === "string" && <Button secondary class="mb-2 ml-2" onClick={() => {
+                        remote.openCellInEditor(state.textareaValue, state.column, state.tableName, `row ${state.row + 1}`, "draft").catch(console.error)
+                    }} title="Read-only snapshot of the current draft" data-testid="view-cell-in-editor">Preview Draft in Editor</Button>}
+                    {state.type === "string" && <Button secondary class="mb-2 ml-2" onClick={() => setExpanded(!expanded)}>{expanded ? "Collapse" : "Expand"}</Button>}
+                </div>
+                {remote.isVSCode && state.type === "string" && <p class="mb-2 text-gray-500">Read-only snapshot; changes require opening a new preview. JSON is formatted automatically.</p>}
                 <DataEditor
+                    style={expanded ? { height: "min(55vh, 500px)" } : undefined}
                     column={state.column}
-                    rows={5}
+                    rows={10}
                     type={state.type}
                     textareaValue={state.textareaValue}
                     onTextareaValueChange={(value) => useEditorStore.setState({ textareaValue: value, isTextareaDirty: true })}
@@ -659,10 +676,6 @@ export const Editor = () => {
                     onBlobValueChange={(value) => useEditorStore.setState({ blobValue: value })}
                     onTypeChange={(type) => { useEditorStore.setState({ type }) }}
                 />
-                <div class="mt-2">
-                    <Commit query={query[0]} onClick={() => { state.commit(...query).catch(console.error) }} />
-                    <Cancel />
-                </div>
             </>
             break
         }
@@ -829,14 +842,14 @@ const parseTextareaValue = (value: string, blobValue: Uint8Array | null, type: E
 const Commit = (props: { disabled?: boolean, onClick: () => void, style?: JSXInternal.CSSProperties, class?: string, query: string }) => {
     useEffect(() => {
         const handler = (ev: KeyboardEvent) => {
-            if (ev.ctrlKey && ev.code === "Enter") {
+            if (ev.ctrlKey && ev.code === "Enter" && !props.disabled) {
                 props.onClick()
                 ev.preventDefault()
             }
         }
         window.addEventListener("keydown", handler)
         return () => { window.removeEventListener("keydown", handler) }
-    }, [props.onClick])
+    }, [props.onClick, props.disabled])
     return <Button disabled={props.disabled} style={props.style} class={"mb-2 " + (props.class ?? "")} onClick={props.onClick} title={props.query} data-testid="commit">
         Commit<span class="opacity-60 ml-2 [font-size:70%]">Ctrl+Enter</span>
     </Button>
