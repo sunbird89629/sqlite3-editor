@@ -10,7 +10,13 @@ description: 在此仓库构建 SQLite3 Editor 的 VSIX、安装到 VS Code 或�
 ## 打包
 
 1. 确认根目录的 UI 依赖、`vscode/node_modules` 和 Rust/Cargo 已安装。`vscode` 不属于 npm workspace，有独立的 `package-lock.json`。优先按锁文件安装依赖；不要为解决依赖问题更新锁文件或升级项目依赖，除非任务明确要求。
-2. 从 `vscode/` 执行。VSIX 文件名必须包含 `package.json` 中的插件版本，例如 `sqlite3-editor-3.0.1.vsix`；打包不会自动增加版本号，除非用户要求，保持当前版本不变。
+2. 每次从当前源码新打包时，在 `vscode/` 将扩展补丁版本递增一次（例如 `3.0.1` → `3.0.2`），并同步 `package.json` 与 `package-lock.json` 的项目版本。用户指定具体版本或明确要求保持版本时，以用户要求为准。同一次打包失败重试或重新安装同一个 VSIX 不重复递增；仅安装已有 VSIX 或检查安装时不修改源码版本。不要创建 Git tag。
+
+   ```sh
+   npm version patch --no-git-tag-version
+   ```
+
+   核对 `package.json`、`package-lock.json` 顶层和根包版本一致，再从 `vscode/` 打包。VSIX 文件名必须包含新版本，例如 `sqlite3-editor-3.0.2.vsix`。
 
    ```sh
    sqlite_editor_version=$(node -p "require('./package.json').version")
@@ -37,6 +43,10 @@ code --profile 'VimMode' --list-extensions --show-versions | rg -i 'yy0931\.vsco
 列表中的版本只能证明该 ID 在目标档案中已安装，不能证明扩展已启用，也不能区分版本相同的不同构建。到目标窗口的扩展详情页核对版本、来源、安装路径、启用状态和自动更新状态。若用户要求使用扩展且它被禁用，启用该目标扩展；如果用户明确要求保持禁用则遵从。需要证明安装了本次构建时，检查详情页实际安装路径中的 `extension.js` 及前端 JS 资源，与 VSIX 里的对应文件比较哈希；配置了自定义扩展目录时，以实际目标为准。
 
 只有真正打开临时数据库并检查数据显示后，才能声称扩展宿主运行验证通过；使用新建的独立临时路径，避免修改用户数据库。Rust 二进制缺失时需要 Python 才能回退；部分终端工具也需要 Python，可用 `sqlite3-editor.pythonPath` 指定解释器。报告区分打包、目标档案安装、启用、文件匹配和运行验证各自结果。
+
+## 自动提交
+
+从当前源码打包并安装成功、完成版本和安装文件核对后，自动提交本次打包涉及的代码与版本变更。提交前检查 Git 状态和差异，运行 `git diff --check`，只暂存本次相关文件，保留无关或已暂存的其他改动；提交信息概括实际修改并包含版本号。不要跳过 Git hooks，提交后报告提交 SHA 和安装验证结果。打包、安装或必要核对失败时不要自动提交；仅打包、仅安装已有 VSIX 或检查安装时也不自动提交。除非用户另外要求，不推送或创建 Git tag。
 
 ## 已知问题
 

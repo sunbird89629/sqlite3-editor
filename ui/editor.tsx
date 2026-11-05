@@ -499,6 +499,7 @@ export type OnWriteOptions = {
 export const Editor = () => {
     const state = useEditorStore()
     const [expanded, setExpanded] = useState(false)
+    useEffect(() => { setExpanded(false) }, [state.statement, state.statement === "UPDATE" ? state.tableName : undefined, state.statement === "UPDATE" ? state.row : undefined, state.statement === "UPDATE" ? state.column : undefined])
 
     useLayoutEffect(() => {
         if (state.statement !== "UPDATE") { return }
@@ -642,33 +643,32 @@ export const Editor = () => {
             break
         }
         case "UPDATE": {
-            header = <span class="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span>
-                    <Highlight data-testid="UPDATE">UPDATE </Highlight>
-                    {escapeSQLIdentifier(state.tableName)} SET {escapeSQLIdentifier(state.column)} = ? WHERE <select value={state.selectedConstraint} class="pl-1" onChange={(ev) => { useEditorStore.setState({ selectedConstraint: +ev.currentTarget.value }) }}>{
-                        state.constraintChoices.map((columns, i) => <option value={i}>{columns.map((column) => `${column} = ${unsafeEscapeValue(state.record[column] as remote.SQLite3Value)}`).join(" AND ")}</option>)
-                    }</select>
+            header = <span class="cell-editor-heading">
+                <span class="cell-editor-location">
+                    <span class="cell-editor-caption" data-testid="UPDATE">EDIT CELL</span>
+                    <span class="cell-editor-path">{state.tableName} <span aria-hidden="true">/</span> {state.column}</span>
+                    <label class="cell-editor-row">Row <select aria-label="Select row identifier" value={state.selectedConstraint} onChange={(ev) => { useEditorStore.setState({ selectedConstraint: +ev.currentTarget.value }) }}>
+                        {state.constraintChoices.map((columns, i) => <option value={i}>{columns.map((column) => `${column} = ${unsafeEscapeValue(state.record[column] as remote.SQLite3Value)}`).join(" AND ")}</option>)}
+                    </select></label>
                 </span>
-                <span class="ml-auto whitespace-nowrap">
-                    {"Type "}<DataTypeInput value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); mountInput() }} />
-                </span>
-                <span class="text-gray-500" role="status">{state.isTextareaDirty ? "● Unsaved" : "● Saved"}</span>
+                <span class="cell-editor-status" role="status">{state.isTextareaDirty ? "● Unsaved" : "● Saved"}</span>
+                <span class="cell-editor-types"><span>Type</span> <DataTypeInput value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); mountInput() }} /></span>
             </span>
             const query = state.buildQuery()
             editor = <>
-                <div class="flex flex-wrap items-center">
+                <div class="cell-editor-actions flex flex-wrap items-center">
                     <Commit disabled={!state.isTextareaDirty} query={query[0]} onClick={() => { state.commit(...query).catch(console.error) }} />
                     <Cancel />
                     {remote.isVSCode && state.type === "string" && <Button secondary class="mb-2 ml-2" onClick={() => {
                         remote.openCellInEditor(state.textareaValue, state.column, state.tableName, `row ${state.row + 1}`, "draft").catch(console.error)
-                    }} title="Read-only snapshot of the current draft" data-testid="view-cell-in-editor">Preview Draft in Editor</Button>}
+                    }} title="Open a read-only snapshot of the current draft" data-testid="view-cell-in-editor">↗ Preview in Editor</Button>}
                     {state.type === "string" && <Button secondary class="mb-2 ml-2" onClick={() => setExpanded(!expanded)}>{expanded ? "Collapse" : "Expand"}</Button>}
                 </div>
-                {remote.isVSCode && state.type === "string" && <p class="mb-2 text-gray-500">Read-only snapshot; changes require opening a new preview. JSON is formatted automatically.</p>}
+                {remote.isVSCode && state.type === "string" && <p class="mb-2 text-gray-500">Read-only snapshot · JSON is formatted automatically · Reopen to see changes.</p>}
                 <DataEditor
-                    style={expanded ? { height: "min(55vh, 500px)" } : undefined}
+                    expanded={expanded}
                     column={state.column}
-                    rows={10}
+                    rows={7}
                     type={state.type}
                     textareaValue={state.textareaValue}
                     onTextareaValueChange={(value) => useEditorStore.setState({ textareaValue: value, isTextareaDirty: true })}
@@ -753,7 +753,7 @@ type EditorDataType = "string" | "number" | "null" | "blob" | "default"
 let editorHeight = new Map<string, string>()
 
 /** Renders a textarea for the given data type `props.type`. */
-const DataEditor = (props: { column: string, rows?: number, style?: JSXInternal.CSSProperties, type: EditorDataType, textareaValue: string, onTextareaValueChange: (value: string) => void, blobValue: Uint8Array | null, onBlobValueChange: (value: Uint8Array) => void, tabIndex?: number, class?: string, onTypeChange: (type: EditorDataType) => void }) => {
+const DataEditor = (props: { column: string, expanded?: boolean, rows?: number, style?: JSXInternal.CSSProperties, type: EditorDataType, textareaValue: string, onTextareaValueChange: (value: string) => void, blobValue: Uint8Array | null, onBlobValueChange: (value: Uint8Array) => void, tabIndex?: number, class?: string, onTypeChange: (type: EditorDataType) => void }) => {
     const [filename, setFilename] = useState("")
 
     const ref = useRef<HTMLTextAreaElement>(null)
@@ -762,19 +762,19 @@ const DataEditor = (props: { column: string, rows?: number, style?: JSXInternal.
         if (!ref.current) { return }
         const textarea = ref.current
         if (props.type === "string") {
-            textarea.style.height = editorHeight.get(props.column) ?? ""
+            textarea.style.height = props.expanded ? "min(45vh, 400px)" : editorHeight.get(props.column) ?? ""
         } else {
             textarea.style.height = ""  // Reset the height of the textarea
         }
 
-        if (props.type !== "string") { return }
+        if (props.type !== "string" || props.expanded) { return }
         const observer = new ResizeObserver((a) => {
             if (!textarea || !textarea.style.height) { return }
             editorHeight.set(props.column, textarea.style.height)
         })
         observer.observe(textarea)
         return () => { observer.disconnect() }
-    }, [ref.current, props.type, props.column])
+    }, [ref.current, props.type, props.column, props.expanded])
 
     // BLOB
     if (props.type === "blob") {
@@ -807,7 +807,7 @@ const DataEditor = (props: { column: string, rows?: number, style?: JSXInternal.
         spellcheck={false}
         style={{
             color: type2color(props.type),
-            ...props.type === "string" ? { height: editorHeight.get(props.column) ?? "" } : { height: "" },
+            ...props.type === "string" ? { height: props.expanded ? "min(45vh, 400px)" : editorHeight.get(props.column) ?? "" } : { height: "" },
             ...props.style,
         }}
         class={`data-editor-${props.type} ${props.type === "string" ? "resize-y" : "resize-none"} ` + (props.class ?? "")}

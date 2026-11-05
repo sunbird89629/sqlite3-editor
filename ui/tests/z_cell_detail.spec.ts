@@ -31,6 +31,12 @@ test('cell controls are above the editor and the current draft is sent for viewi
     await page.getByTestId('cell 0, 0').click()
     const input = page.getByTestId('editor-textarea')
     await expect(page.getByTestId('commit')).toBeDisabled()
+    const originalHeight = (await input.boundingBox())!.height
+    await page.getByRole('button', { name: 'Expand', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Collapse', exact: true })).toBeVisible()
+    expect((await input.boundingBox())!.height).toBeGreaterThan(originalHeight)
+    await page.getByRole('button', { name: 'Collapse', exact: true }).click()
+    expect(Math.abs((await input.boundingBox())!.height - originalHeight)).toBeLessThan(2)
     await expect(page.getByRole('status')).toContainText('Saved')
     const draft = '{"id":9223372036854775807,"items":[1,2]}'
     await input.fill(draft)

@@ -271,3 +271,18 @@ dialog {
 
 .more-actions button { display: block; width: 100%; text-align: left; padding: 6px 8px; }
 .more-actions button::after { content: attr(aria-label); margin-left: 8px; }
+
+/* Selected-cell controls: keep identity, type and actions readable in narrow editors. */
+.cell-editor-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 10px 8px 6px; }
+.cell-editor-location { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.cell-editor-caption { color: var(--vscode-descriptionForeground, #717b80); font-size: .85em; letter-spacing: .05em; }
+.cell-editor-path { overflow-wrap: anywhere; font-weight: 600; }
+.cell-editor-path span { color: var(--vscode-descriptionForeground, #717b80); padding: 0 2px; }
+.cell-editor-row { display: flex; align-items: center; gap: 5px; color: var(--vscode-descriptionForeground, #717b80); min-width: 0; }
+.cell-editor-row select { max-width: min(40vw, 320px); }
+.cell-editor-status { color: var(--vscode-descriptionForeground, #717b80); white-space: nowrap; }
+.cell-editor-types { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
+.cell-editor-types > span:first-child { color: var(--vscode-descriptionForeground, #717b80); margin-right: 4px; }
+.cell-editor-actions { padding: 2px 8px 0; }
+#editor > div { padding-left: 8px; padding-right: 8px; }
+@media (max-width: 500px) { .cell-editor-heading { grid-template-columns: 1fr; } .cell-editor-status { grid-row: 2; } .cell-editor-row select { max-width: 65vw; } }
