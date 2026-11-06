@@ -3,44 +3,11 @@ import * as remote from "./remote"
 import { useEditorStore } from "./editor"
 import produce from "immer"
 import { scrollbarWidth, ScrollbarY } from "./scrollbar"
-import { flash, persistentRef, renderContextmenu, Tooltip } from "./components"
+import { flash, persistentRef, renderContextmenu } from "./components"
 import { BigintMath, createStore, querySelectorWithRetry } from "./util"
 import deepEqual from "fast-deep-equal"
 import type { JSXInternal } from "preact/src/jsx"
 import { fileTypeFromBuffer } from "file-type/core"
-
-/** Build the WHERE clause from the state of the find widget */
-const buildFindWidgetQuery = (tableInfo: remote.TableInfo) => {
-    const { findWidget, isFindWidgetVisible } = useTableStore.getState()
-    let findWidgetQuery = ""
-    let findWidgetParams: string[] = []
-    if (isFindWidgetVisible) {
-        if (findWidget.value) {
-            if (findWidget.regex) {
-                findWidgetQuery = tableInfo.map(({ name: column }) => `find_widget_regexp(IFNULL(${escapeSQLIdentifier(column)}, 'NULL'), ?, ${findWidget.wholeWord ? "1" : "0"}, ${findWidget.caseSensitive ? "1" : "0"})`).join(" OR ")
-            } else {
-                if (findWidget.wholeWord) {
-                    if (findWidget.caseSensitive) {
-                        findWidgetQuery = tableInfo.map(({ name: column }) => `IFNULL(${escapeSQLIdentifier(column)}, 'NULL') = ?`).join(" OR ")
-                    } else {
-                        findWidgetQuery = tableInfo.map(({ name: column }) => `UPPER(IFNULL(${escapeSQLIdentifier(column)}, 'NULL')) = UPPER(?)`).join(" OR ")
-                    }
-                } else {
-                    if (findWidget.caseSensitive) {
-                        findWidgetQuery = tableInfo.map(({ name: column }) => `INSTR(IFNULL(${escapeSQLIdentifier(column)}, 'NULL'), ?) > 0`).join(" OR ")
-                    } else {
-                        findWidgetQuery = tableInfo.map(({ name: column }) => `INSTR(UPPER(IFNULL(${escapeSQLIdentifier(column)}, 'NULL')), UPPER(?)) > 0`).join(" OR ")
-                    }
-                }
-            }
-            findWidgetParams = tableInfo.map(() => findWidget.value)
-        }
-        if (findWidgetQuery !== "") {
-            findWidgetQuery = ` WHERE ${findWidgetQuery}`
-        }
-    }
-    return { findWidgetQuery, findWidgetParams }
-}
 
 export const useTableStore = createStore("useTableStore", {
     /** True if a change to the database by another process is detected but the table is not reloaded yet. */
@@ -61,15 +28,6 @@ export const useTableStore = createStore("useTableStore", {
     useCustomViewerQuery: false,
     /** a custom query for the viewer */
     customViewerQuery: "",
-    /** the state of the find widget */
-    findWidget: {
-        value: "",
-        caseSensitive: false,
-        wholeWord: false,
-        regex: false,
-    },
-    /** whether the find widget is visible */
-    isFindWidgetVisible: false,
     /** The viewer reloads the table when the database is changed by another process when true. */
     autoReload: true,
     _rerender: {} as Record<string, never>,
@@ -98,7 +56,7 @@ export const useTableStore = createStore("useTableStore", {
 }, (set, get) => {
     let reloadGeneration = 0
     let schemaTable: string | undefined
-    let pageSnapshot: { table: string, filter: string, params: string[], top: bigint, records: readonly Record<string, remote.SQLite3Value>[] } | null = null
+    let pageSnapshot: { table: string, top: bigint, records: readonly Record<string, remote.SQLite3Value>[] } | null = null
     /** Queries the visible area of the database table. */
     const reloadTable = async (reloadSchema: boolean, reloadRecordCount: boolean) => {
         const generation = ++reloadGeneration
@@ -133,12 +91,10 @@ export const useTableStore = createStore("useTableStore", {
             const retainedColumns = reloadSchema && !state.useCustomViewerQuery && state.tableName === schemaTable ? state.visibleColumns.filter((name) => tableInfo.some((column) => column.name === name)) : []
             const selectedColumns = retainedColumns.length ? retainedColumns : tableInfo.map(({ name }) => name)
 
-            // Filter records by the state of the find widget
-            const { findWidgetQuery, findWidgetParams } = buildFindWidgetQuery(tableInfo)
             if (reloadSchema || reloadRecordCount) { pageSnapshot = null }
             if (generation !== reloadGeneration) { return }
             if (reloadRecordCount) {
-                const numRecords = (await remote.query(`SELECT COUNT(*) as count FROM ${subquery}${findWidgetQuery}`, findWidgetParams, "r", { withoutLogging: true })).records[0]!.count
+                const numRecords = (await remote.query(`SELECT COUNT(*) as count FROM ${subquery}`, [], "r", { withoutLogging: true })).records[0]!.count
                 if (generation !== reloadGeneration) { return }
                 if (typeof numRecords !== "bigint") { throw new Error(numRecords + "") }
                 await setPaging({ numRecords }, undefined, true)
@@ -147,13 +103,13 @@ export const useTableStore = createStore("useTableStore", {
 
             // Query the database
             const delta = pageSnapshot ? state.paging.visibleAreaTop - pageSnapshot.top : 0n
-            const anchor = rowIdColumn && pageSnapshot && pageSnapshot.table === subquery && pageSnapshot.filter === findWidgetQuery && deepEqual(pageSnapshot.params, findWidgetParams) && delta > 0n && delta <= BigInt(pageSnapshot.records.length) ? pageSnapshot.records[Number(delta - 1n)]?.[rowIdColumn] : undefined
+            const anchor = rowIdColumn && pageSnapshot && pageSnapshot.table === subquery && delta > 0n && delta <= BigInt(pageSnapshot.records.length) ? pageSnapshot.records[Number(delta - 1n)]?.[rowIdColumn] : undefined
             const useAnchor = typeof anchor === "bigint" || typeof anchor === "number"
-            const where = useAnchor ? ` WHERE ${findWidgetQuery ? `(${findWidgetQuery.slice(7)}) AND ` : ""}${escapeSQLIdentifier(rowIdColumn!)} > ?` : findWidgetQuery
+            const where = useAnchor ? ` WHERE ${escapeSQLIdentifier(rowIdColumn!)} > ?` : ""
             const selectedSQL = reloadSchema ? (selectedColumns.length === tableInfo.length ? "*" : selectedColumns.map(escapeSQLIdentifier).join(", ")) : getVisibleColumnsSQL()
-            const records = (await remote.query(`SELECT${rowIdColumn ? ` ${escapeSQLIdentifier(rowIdColumn)} AS ${escapeSQLIdentifier(rowIdColumn)},` : ""} ${selectedSQL} FROM ${subquery}${where}${rowIdColumn ? ` ORDER BY ${escapeSQLIdentifier(rowIdColumn)}` : ""} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`, [...findWidgetParams, ...(useAnchor ? [anchor] : []), state.paging.visibleAreaSize, ...(useAnchor ? [] : [state.paging.visibleAreaTop])], "r", { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" })).records!
+            const records = (await remote.query(`SELECT${rowIdColumn ? ` ${escapeSQLIdentifier(rowIdColumn)} AS ${escapeSQLIdentifier(rowIdColumn)},` : ""} ${selectedSQL} FROM ${subquery}${where}${rowIdColumn ? ` ORDER BY ${escapeSQLIdentifier(rowIdColumn)}` : ""} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`, [...(useAnchor ? [anchor] : []), state.paging.visibleAreaSize, ...(useAnchor ? [] : [state.paging.visibleAreaTop])], "r", { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" })).records!
             if (generation !== reloadGeneration) { return }
-            pageSnapshot = { table: subquery, filter: findWidgetQuery, params: findWidgetParams, top: state.paging.visibleAreaTop, records }
+            pageSnapshot = { table: subquery, top: state.paging.visibleAreaTop, records }
 
             // Update the store
             if (!reloadSchema) {
@@ -279,23 +235,6 @@ export const useTableStore = createStore("useTableStore", {
             })
         }),
         getPageMax: () => BigInt(Math.ceil(Number(get().paging.numRecords) / Number(get().paging.visibleAreaSize))),
-        setFindWidgetVisibility: async (value: boolean) => {
-            if (get().isFindWidgetVisible === value) { return }
-            set({ isFindWidgetVisible: value })
-            await reloadTable(false, true)
-        },
-        setFindWidgetState: async (opts: {
-            value?: string
-            caseSensitive?: boolean
-            wholeWord?: boolean
-            regex?: boolean
-        }) => {
-            const oldState = get().findWidget
-            const newState = { ...oldState, ...opts }
-            if (deepEqual(oldState, newState)) { return }
-            set({ findWidget: newState })
-            await reloadTable(false, true)
-        },
         requireReloading: () => { set({ reloadRequired: true }) },
         rerender: () => set({ _rerender: {} }),
         addErrorMessage: (value: string) => set((s) => ({ errorMessage: s.errorMessage + value + "\n" })),
@@ -375,7 +314,6 @@ export const Table = () => {
         return () => { el.removeEventListener("wheel", onWheel as any, { passive: false } as any) }
     }, [tableRef.current])
 
-    const isFindWidgetVisible = useTableStore((s) => s.isFindWidgetVisible)
     const tableType = useTableStore((s) => s.tableList.find(({ name }) => name === s.tableName)?.type)
     const foreignKeyList = useTableStore((s) => s.foreignKeyList)
 
@@ -480,14 +418,6 @@ export const Table = () => {
 
                 {/* Table Body */}
                 <tbody>
-                    {/* Find Widget */}
-                    {isFindWidgetVisible && <tr>
-                        <td class="pl-[10px] pr-[10px] bg-[var(--gutter-color)]"></td>
-                        <td class="relative text-right" colSpan={tableInfo.length} style={{ maxWidth: getColumnWidths().reduce((a, b) => a + b, 0) }}>
-                            <FindWidget />
-                        </td>
-                    </tr>}
-
                     {/* Rows */}
                     {records.map((record, row) => <TableRow selected={selectedRow === row} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={BigInt(visibleAreaTop + row) + 1n} />)}
 
@@ -510,43 +440,6 @@ export const Table = () => {
                 style={{ width: scrollbarWidth }}
                 onChange={() => { setPaging({ visibleAreaTop: BigInt(Math.round(scrollbarRef.current!.value)) }).catch(console.error) }} />}
     </>
-}
-
-/** Renders a search widget with toggle buttons for case sensitivity, whole word, and regular expression. */
-const FindWidget = () => {
-    const { value, caseSensitive, wholeWord, regex } = useTableStore((s) => s.findWidget)
-    const setFindWidgetState = useTableStore((s) => s.setFindWidgetState)
-    const ref = useRef<HTMLInputElement>(null)
-    const timer = useRef<ReturnType<typeof setTimeout>>()
-    const [draft, setDraft] = useState(value)
-    useEffect(() => { setDraft(value) }, [value])
-    useEffect(() => () => { clearTimeout(timer.current) }, [])
-
-    // Focus the input box on mount
-    useEffect(() => {
-        ref.current!.focus()
-        ref.current!.select()
-    }, [])
-
-    return <div class="inline-block pl-1 pt-1 bg-gray-200 shadow-md whitespace-nowrap sticky right-3">
-        {/* Text input */}
-        <input id="findWidget" ref={ref} class="mr-1" placeholder="Find" value={draft} onInput={(ev) => { const value = ev.currentTarget.value; setDraft(value); clearTimeout(timer.current); timer.current = setTimeout(() => { setFindWidgetState({ value }).catch(console.error) }, 250) }} />
-
-        {/* Match Case button */}
-        <Tooltip content="Match Case" ><span class={"[font-size:130%] align-middle select-none p-[2px] [border-radius:1px] inline-block cursor-pointer " + (caseSensitive ? "bg-blue-400 bg-opacity-40 text-black" : "text-gray-600 hover:bg-gray-300")} onClick={() => setFindWidgetState({ caseSensitive: !caseSensitive })}>
-            <svg class="w-[1em] h-[1em]"><use xlinkHref="#case-sensitive" /></svg>
-        </span></Tooltip>
-
-        {/* Match Whole Word button */}
-        <Tooltip content="Match Whole Word"><span class={"[font-size:130%] align-middle select-none p-[2px] [border-radius:1px] inline-block cursor-pointer " + (wholeWord ? "bg-blue-400 bg-opacity-40 text-black" : "text-gray-600 hover:bg-gray-300")} onClick={() => setFindWidgetState({ wholeWord: !wholeWord })}>
-            <svg class="w-[1em] h-[1em]"><use xlinkHref="#whole-word" /></svg>
-        </span></Tooltip>
-
-        {/* Use Regular Expression button */}
-        <Tooltip content="Use Regular Expression"><span class={"[font-size:130%] align-middle select-none p-[2px] [border-radius:1px] inline-block cursor-pointer " + (regex ? "bg-blue-400 bg-opacity-40 text-black" : "text-gray-600 hover:bg-gray-300")} onClick={() => setFindWidgetState({ regex: !regex })}>
-            <svg class="w-[1em] h-[1em]"><use xlinkHref="#regex" /></svg>
-        </span></Tooltip>
-    </div>
 }
 
 const TableRow = (props: { selected: boolean, readonly selectedColumn: string | null, input: { readonly draftValue: JSXInternal.Element, readonly textarea: HTMLTextAreaElement | null } | null, record: { readonly [key in string]: Readonly<remote.SQLite3Value> }, rowNumber: bigint, row: number, columnWidths: readonly number[] }) => {
@@ -783,7 +676,12 @@ export const CellValue = ({ value }: { value: remote.SQLite3Value }) => {
     } else if (value === null) {  // NULL
         return <span class="text-[var(--data-null)]">NULL</span>
     } else if (typeof value === "string") {  // TEXT
-        return <span class="text-[var(--data-string)]">{value.replaceAll("\\", "\\\\").replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n") || /* nbsp */"\u00a0"}</span>
+        // Only render a bounded preview; the original value remains available for editing and copying.
+        const limit = 512
+        let end = Math.min(value.length, limit)
+        if (end < value.length && end > 0 && value.charCodeAt(end - 1) >= 0xd800 && value.charCodeAt(end - 1) <= 0xdbff) { end-- }
+        const preview = value.slice(0, end).replaceAll("\\", "\\\\").replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n")
+        return <span class="text-[var(--data-string)]">{(preview || /* nbsp */"\u00a0") + (end < value.length ? "…" : "")}</span>
     } else if (typeof value === "number") {  // REAL
         return <span class="text-[var(--data-number)]">{/^[+\-]?\d+$/.test("" + value) ? `${value}.0` : `${value}`}</span>
     } else {  // INTEGER

@@ -51,7 +51,7 @@ test('row selectors and inserts preserve the intended records and types', async 
     expect(result.inserted).toEqual({ a: 'default', b: '42', type: 'integer' })
 })
 
-test('sequential scrolling uses a rowid cursor and keeps filtered results correct', async ({ page }) => {
+test('sequential scrolling uses a rowid cursor', async ({ page }) => {
     const queries: string[] = []
     await page.route('**/query', async (route) => {
         const body = route.request().postDataBuffer()
@@ -68,11 +68,24 @@ test('sequential scrolling uses a rowid cursor and keeps filtered results correc
         await remote.query("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<80) INSERT INTO \"cursor regression\" SELECT CASE WHEN x%2=0 THEN 'match' ELSE 'other' END, CASE WHEN x%2=1 THEN 'match' ELSE 'other' END FROM n", [], 'w+')
         await table.getState().reloadAllTables('cursor regression')
         await table.getState().setViewerQuery({ tableName: 'cursor regression' })
-        await table.getState().setFindWidgetVisibility(true)
-        await table.getState().setFindWidgetState({ value: 'match' })
         await table.getState().setPaging({ visibleAreaTop: 5n })
         return table.getState().records.map((r: any) => String(r.rowid))
     })
     expect(result[0]).toBe('6')
-    expect(queries.some((query) => /\) AND "rowid" > \?/.test(query))).toBe(true)
+    expect(queries.some((query) => /WHERE "rowid" > \?/.test(query))).toBe(true)
+})
+
+test('table find is removed without intercepting Ctrl+F', async ({ page }) => {
+    await page.goto('http://localhost:5173/')
+    await expect(page.getByTestId('find-button')).toHaveCount(0)
+    const prevented = await page.evaluate(() => {
+        const event = new KeyboardEvent('keydown', { code: 'KeyF', key: 'f', ctrlKey: true, bubbles: true, cancelable: true })
+        document.body.dispatchEvent(event)
+        return event.defaultPrevented
+    })
+    expect(prevented).toBe(false)
+    await expect(page.locator('#findWidget')).toHaveCount(0)
+    await expect(page.getByTestId('query-editor-toggle')).toBeVisible()
+    await page.getByTestId('table-name').click()
+    await expect(page.getByRole('combobox', { name: 'Search tables or views' })).toBeVisible()
 })

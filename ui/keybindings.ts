@@ -68,40 +68,12 @@ export const onKeydown = async (ev: KeyboardEvent) => {
         const inputFocus = ev.target instanceof HTMLElement && !ev.target.matches("table textarea") && ev.target.matches("label, button, input, textarea, select, option")
         /** True when a textarea shown over a cell is active. */
         const cellInputFocus = ev.target instanceof HTMLElement && ev.target.matches("table textarea")
-        const findWidgetFocus = ev.target instanceof HTMLInputElement && ev.target.id === "findWidget"
 
         const p = () => ev.preventDefault()
         const key = createKeyboardShortcutMatcher(ev)
-        if (findWidgetFocus && key("Escape")) {
+        if (inputFocus && key("Escape")) {
             p()
             ev.target.blur()
-            await useTableStore.getState().setFindWidgetVisibility(false)
-        } else if (inputFocus && key("Escape")) {
-            p()
-            ev.target.blur()
-        } else if (key("Ctrl + KeyF")) {
-            p()
-            if (useTableStore.getState().isFindWidgetVisible) {
-                const findWidget = document.querySelector<HTMLInputElement>("#findWidget")
-                if (findWidget) {
-                    findWidget.focus()
-                    findWidget.select()
-                }
-            } else {
-                await useTableStore.getState().setFindWidgetVisibility(true)
-            }
-        } else if (findWidgetFocus && key("Alt + KeyC")) {
-            p()
-            const mainState = useTableStore.getState()
-            await mainState.setFindWidgetState({ caseSensitive: !mainState.findWidget.caseSensitive })
-        } else if (findWidgetFocus && key("Alt + KeyW")) {
-            p()
-            const mainState = useTableStore.getState()
-            await mainState.setFindWidgetState({ wholeWord: !mainState.findWidget.wholeWord })
-        } else if (findWidgetFocus && key("Alt + KeyR")) {
-            p()
-            const mainState = useTableStore.getState()
-            await mainState.setFindWidgetState({ regex: !mainState.findWidget.regex })
         } else if (!inputFocus && state.statement === "UPDATE" && singleClick && key("Escape")) {
             p()
             await state.discardChanges()

@@ -5,6 +5,7 @@ import { render } from "preact"
 import { Editor, useEditorStore } from "./editor"
 import { useEffect, useRef, useState } from "preact/hooks"
 import { QueryEditor } from "./query_editor"
+import { TableSelector } from "./table_selector"
 import * as remote from "./remote"
 import { Button, Checkbox, flash, Highlight, persistentUseState, renderContextmenu, Select, SVGOnlyCheckbox } from "./components"
 import { escapeSQLIdentifier, Table, useTableStore } from "./table"
@@ -64,19 +65,18 @@ const App = () => {
     const tableList = useTableStore((s) => s.tableList)
     const setViewerQuery = useTableStore((s) => s.setViewerQuery)
     const setPaging = useTableStore((s) => s.setPaging)
-    const isFindWidgetVisible = useTableStore((s) => s.isFindWidgetVisible)
     const autoReload = useTableStore((s) => s.autoReload)
     const useCustomViewerQuery = useTableStore((s) => s.useCustomViewerQuery)
     const customViewerQuery = useTableStore((s) => s.customViewerQuery)
     const tableName = useTableStore((s) => s.tableName)
     const tableType = useTableStore((s) => s.tableList.find(({ name }) => name === tableName)?.type)
-    const isTableRendered = useTableStore((s) => s.invalidQuery === null)
     const visibleColumnsSQL = useTableStore((s) => s.getVisibleColumnsSQL())
     const editorStatement = useEditorStore((s) => s.statement)
     const [isSettingsViewOpen, setIsSettingsViewOpen] = persistentUseState("isSettingsViewOpen", false)
     const confirmDialogRef = useRef<HTMLDialogElement>(null)
     const tableRef = useRef<HTMLDivElement>(null)
     const columnSelectDialogRef = useRef<HTMLDialogElement>(null)
+    const moreActionsRef = useRef<HTMLDetailsElement>(null)
 
     useEffect(() => {
         const listener = (event: MessageEvent) => {
@@ -120,6 +120,13 @@ const App = () => {
     // Register keyboard shortcuts
     useEventListener("keydown", onKeydown)
 
+    useEventListener("click", (event) => {
+        const menu = moreActionsRef.current
+        if (menu?.open && event.target instanceof Node && !menu.contains(event.target)) {
+            menu.open = false
+        }
+    })
+
     // Commit changes in the UPDATE editor when the margin on the right side of table is clicked.
     useEventListener("click", async (ev) => {
         if (useEditorStore.getState().statement !== "UPDATE") { return }
@@ -162,11 +169,10 @@ const App = () => {
                     <Highlight>SELECT </Highlight>
                     <button type="button" aria-label="Select visible columns" class="px-2 cursor-pointer hover:bg-gray-300 border-b-[1px] border-b-gray-500 focus:outline focus:outline-2" onClick={() => { columnSelectDialogRef.current?.showModal() }}>{visibleColumnsSQL}</button>
                     <Highlight> FROM </Highlight>
-                    {tableName === undefined ? <>No tables</> : <Select
+                    {tableName === undefined ? <>No tables</> : <TableSelector
                         value={tableName}
                         onChange={(value) => { setViewerQuery({ tableName: value }).catch(console.error) }}
-                        options={Object.fromEntries(tableList.map(({ name: tableName, type }) => [tableName, { group: type }] as const).sort((a, b) => a[0].localeCompare(b[0])))}
-                        class="primary"
+                        tables={tableList}
                         onContextMenu={(ev) => {
                             renderContextmenu(ev, <>
                                 <button onClick={async () => { setIsSettingsViewOpen(!isSettingsViewOpen) }}>Show Table Schema and Indexes</button>
@@ -179,7 +185,7 @@ const App = () => {
                                 <button onClick={async () => { await navigator.clipboard.writeText(tableName); flash(document.querySelector("#editor")!) }}>Copy Table Name</button>
                             </>)
                         }}
-                        data-testid="table-name" />}
+                        />}
                 </>}
 
                 {/* Custom Query */}
@@ -196,12 +202,14 @@ const App = () => {
                 {/* Buttons placed right after the table name */}
                 <div class="my-2">
                     <Button class="mr-2" onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
-                    {/* Schema */}
-                    {!useCustomViewerQuery && <SVGOnlyCheckbox icon={isSettingsViewOpen ? "#close" : "#settings-gear"} title="Show Table Schema and Indexes" label="Schema" checked={isSettingsViewOpen} onClick={() => setIsSettingsViewOpen(!isSettingsViewOpen)} data-testid="schema-button"></SVGOnlyCheckbox>}
 
-                    <details class="inline-block relative mr-2 align-middle">
+                    <details ref={moreActionsRef} class="inline-block relative mr-2 align-middle">
                         <summary class="cursor-pointer px-2 py-1 bg-gray-200 focus:outline focus:outline-2">More actions</summary>
-                        <div class="more-actions absolute z-50 min-w-[220px] p-2 bg-white border border-gray-400 shadow-lg">
+                        <div class="more-actions absolute z-50 min-w-[220px] p-2 bg-white border border-gray-400 shadow-lg" onClick={(event) => {
+                            if (event.target instanceof Element && event.target.closest("button")) {
+                                if (moreActionsRef.current) { moreActionsRef.current.open = false }
+                            }
+                        }}>
                     {/* Drop Table */}
                     {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#trash" title="Drop Table" checked={editorStatement === "DROP TABLE"} onClick={(checked) => {
                         if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
@@ -267,22 +275,19 @@ const App = () => {
                         </>)
                     }}></SVGOnlyCheckbox>
 
-                    {/* Find */}
-                    {isTableRendered && !isSettingsViewOpen && <SVGOnlyCheckbox icon="#search" title="Find (Ctrl+f)" label="Find" checked={isFindWidgetVisible} onClick={(checked) => {
-                        useTableStore.getState().setFindWidgetVisibility(checked).catch(console.error)
-                    }} data-testid="find-button"></SVGOnlyCheckbox>}
                 </div>
             </div>
         </h2>
 
+        {!useCustomViewerQuery && <nav class="schema-tabs" aria-label="Table view">
+            <button type="button" class={!isSettingsViewOpen ? "active" : ""} aria-current={!isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(false)}>Data</button>
+            <button type="button" class={isSettingsViewOpen ? "active" : ""} aria-current={isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(true)} data-testid="schema-button">Schema</button>
+        </nav>}
         {/* Schema and Index */}
-        {isSettingsViewOpen && <div>
-            <SettingsView />
-            <hr class="mt-2 border-b-2 border-b-gray-400" />
-        </div>}
+        {isSettingsViewOpen && !useCustomViewerQuery && <SettingsView onBack={() => setIsSettingsViewOpen(false)} />}
 
         {/* Table */}
-        {!isSettingsViewOpen && <>
+        {(!isSettingsViewOpen || useCustomViewerQuery) && <>
             <div ref={tableRef} class="relative w-max max-w-full pl-[var(--page-padding)] pr-[var(--page-padding)]">
                 <Table />
             </div>
@@ -330,7 +335,7 @@ const App = () => {
             <div class="overflow-auto max-h-[30vh]"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
         </section>}
         <div style={{ display: showQueryEditor ? undefined : "none" }}><QueryEditor /></div>
-        <Editor />
+        <div style={{ display: isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE") ? "none" : undefined }}><Editor /></div>
 
         {/* Confirmation Dialog */}
         <dialog class="py-4 px-8 bg-gray-100 shadow-lg mx-auto mt-[10vh]" ref={confirmDialogRef}>

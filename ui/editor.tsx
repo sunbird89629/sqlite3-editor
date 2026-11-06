@@ -842,7 +842,7 @@ const parseTextareaValue = (value: string, blobValue: Uint8Array | null, type: E
 const Commit = (props: { disabled?: boolean, onClick: () => void, style?: JSXInternal.CSSProperties, class?: string, query: string }) => {
     useEffect(() => {
         const handler = (ev: KeyboardEvent) => {
-            if (ev.ctrlKey && ev.code === "Enter" && !props.disabled) {
+            if (ev.ctrlKey && ev.code === "Enter" && !props.disabled && document.querySelector<HTMLElement>('[data-testid="commit"]')?.getClientRects().length) {
                 props.onClick()
                 ev.preventDefault()
             }
