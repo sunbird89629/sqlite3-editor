@@ -51,7 +51,7 @@ test('row selectors and inserts preserve the intended records and types', async 
     expect(result.inserted).toEqual({ a: 'default', b: '42', type: 'integer' })
 })
 
-test('sequential scrolling uses a rowid cursor', async ({ page }) => {
+test('sequential pagination uses a rowid cursor', async ({ page }) => {
     const queries: string[] = []
     await page.route('**/query', async (route) => {
         const body = route.request().postDataBuffer()
@@ -68,10 +68,10 @@ test('sequential scrolling uses a rowid cursor', async ({ page }) => {
         await remote.query("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<80) INSERT INTO \"cursor regression\" SELECT CASE WHEN x%2=0 THEN 'match' ELSE 'other' END, CASE WHEN x%2=1 THEN 'match' ELSE 'other' END FROM n", [], 'w+')
         await table.getState().reloadAllTables('cursor regression')
         await table.getState().setViewerQuery({ tableName: 'cursor regression' })
-        await table.getState().setPaging({ visibleAreaTop: 5n })
+        await table.getState().setPaging({ visibleAreaTop: 10n })
         return table.getState().records.map((r: any) => String(r.rowid))
     })
-    expect(result[0]).toBe('6')
+    expect(result[0]).toBe('11')
     expect(queries.some((query) => /WHERE "rowid" > \?/.test(query))).toBe(true)
 })
 

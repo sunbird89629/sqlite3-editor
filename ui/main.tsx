@@ -9,7 +9,6 @@ import { TableSelector } from "./table_selector"
 import * as remote from "./remote"
 import { Button, Checkbox, flash, Highlight, persistentUseState, renderContextmenu, Select, SVGOnlyCheckbox } from "./components"
 import { escapeSQLIdentifier, Table, useTableStore } from "./table"
-import "./scrollbar"
 import { SettingsView } from "./schema_view"
 import { onKeydown } from "./keybindings"
 // @ts-ignore
@@ -64,7 +63,6 @@ const App = () => {
     const errorMessage = useTableStore((s) => s.errorMessage)
     const tableList = useTableStore((s) => s.tableList)
     const setViewerQuery = useTableStore((s) => s.setViewerQuery)
-    const setPaging = useTableStore((s) => s.setPaging)
     const autoReload = useTableStore((s) => s.autoReload)
     const useCustomViewerQuery = useTableStore((s) => s.useCustomViewerQuery)
     const customViewerQuery = useTableStore((s) => s.customViewerQuery)
@@ -292,35 +290,6 @@ const App = () => {
                 <Table />
             </div>
 
-            {/* The horizontal handle to resize the height of the table */}
-            <div class="h-2 cursor-ns-resize select-none" onMouseDown={(ev) => {
-                ev.preventDefault()
-                document.body.classList.add("ns-resize")
-                let prev = ev.pageY
-                let visibleAreaSize = useTableStore.getState().paging.visibleAreaSize
-                const onMouseMove = (ev: MouseEvent) => {
-                    const trHeight = 18  // TODO: measure the height of a tr
-                    let pageSizeDelta = 0n
-                    while (ev.pageY - prev > trHeight) {
-                        pageSizeDelta += 1n
-                        prev += trHeight
-                    }
-                    while (ev.pageY - prev < -trHeight) {
-                        pageSizeDelta -= 1n
-                        prev -= trHeight
-                    }
-                    if (pageSizeDelta === 0n) { return }
-                    visibleAreaSize += pageSizeDelta
-                    setPaging({ visibleAreaSize }).catch(console.error)
-                }
-                window.addEventListener("mousemove", onMouseMove)
-                window.addEventListener("mouseup", () => {
-                    window.removeEventListener("mousemove", onMouseMove)
-                    document.body.classList.remove("ns-resize")
-                }, { once: true })
-            }}>
-                <hr class="mt-2 border-b-2 border-b-gray-400" />
-            </div>
         </>}
 
         {/* Error Message */}
@@ -399,12 +368,6 @@ const escapeShell = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
     })()
     useTableStore.setState({ tableList })
     await useTableStore.getState().setViewerQuery({ tableName })
-    {
-        const restored = remote.getState<number>("visibleAreaSize")
-        if (restored !== undefined) {
-            await useTableStore.getState().setPaging({ visibleAreaSize: BigInt(restored) })
-        }
-    }
     await useEditorStore.getState().switchTable(tableName)
     const s = useEditorStore.getState()
     if (s.statement === "CREATE TABLE" && remote.isSQLiteOlderThan3_37) {

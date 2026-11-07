@@ -4,7 +4,7 @@ import type { JSXInternal } from "preact/src/jsx"
 import * as remote from "./remote"
 import { Button, Checkbox, Highlight, Select } from "./components"
 import { blob2hex, escapeSQLIdentifier, CellValue, type2color, unsafeEscapeValue, useTableStore } from "./table"
-import { BigintMath, createStore } from "./util"
+import { createStore } from "./util"
 
 type State =
     // SQL statements that require a table name
@@ -350,7 +350,7 @@ export const useEditorStore = createStore("useEditorStore", {
             await useTableStore.getState().reloadTable(false, true)
             if (opts.scrollToBottom) {
                 let state = useTableStore.getState()
-                await state.setPaging({ visibleAreaTop: BigintMath.max(state.paging.numRecords - state.paging.visibleAreaSize + 1n, 0n) })
+                await state.setPaging({ visibleAreaTop: state.paging.numRecords > 0n ? state.paging.numRecords - 1n : 0n })
                 state = useTableStore.getState()
             }
         }

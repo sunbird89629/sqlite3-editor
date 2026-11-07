@@ -2,12 +2,18 @@ import { useRef, useMemo, useCallback, useState, useEffect, useLayoutEffect } fr
 import * as remote from "./remote"
 import { useEditorStore } from "./editor"
 import produce from "immer"
-import { scrollbarWidth, ScrollbarY } from "./scrollbar"
 import { flash, persistentRef, renderContextmenu } from "./components"
 import { BigintMath, createStore, querySelectorWithRetry } from "./util"
 import deepEqual from "fast-deep-equal"
 import type { JSXInternal } from "preact/src/jsx"
 import { fileTypeFromBuffer } from "file-type/core"
+
+export const PAGE_SIZE = 10n
+export const pageCount = (count: bigint) => (count + PAGE_SIZE - 1n) / PAGE_SIZE
+export const pageOffset = (top: bigint, count: bigint) => {
+    const last = count > 0n ? (pageCount(count) - 1n) * PAGE_SIZE : 0n
+    return BigintMath.max(0n, BigintMath.min(last, (top / PAGE_SIZE) * PAGE_SIZE))
+}
 
 export const useTableStore = createStore("useTableStore", {
     /** True if a change to the database by another process is detected but the table is not reloaded yet. */
@@ -20,7 +26,7 @@ export const useTableStore = createStore("useTableStore", {
         /** the number of records in the table */
         numRecords: 0n,
         /** the number of rows visible at a time */
-        visibleAreaSize: 20n,
+        visibleAreaSize: PAGE_SIZE,
     },
     /** error messages */
     errorMessage: "",
@@ -165,7 +171,11 @@ export const useTableStore = createStore("useTableStore", {
         customViewerQuery?: string
         tableName?: string
     }) => {
-        set(opts)
+        const previous = get()
+        const changed = (opts.tableName !== undefined && opts.tableName !== previous.tableName)
+            || (opts.useCustomViewerQuery !== undefined && opts.useCustomViewerQuery !== previous.useCustomViewerQuery)
+            || (opts.customViewerQuery !== undefined && opts.customViewerQuery !== previous.customViewerQuery)
+        set(changed ? { ...opts, paging: { ...previous.paging, visibleAreaTop: 0n } } : opts)
         await remote.setState("tableName", get().tableName)
         await reloadTable(true, true)
         if (opts.useCustomViewerQuery !== undefined || opts.customViewerQuery !== undefined || opts.tableName !== undefined) {
@@ -188,20 +198,19 @@ export const useTableStore = createStore("useTableStore", {
         return uniqueConstraints
     }
     const setPaging = async (opts: { visibleAreaTop?: bigint, numRecords?: bigint, visibleAreaSize?: bigint }, preserveEditorState?: true, withoutTableReloading?: true) => {
-        const previousSize = get().paging.visibleAreaSize
-        const paging = { ...get().paging, ...opts }
-        paging.visibleAreaSize = BigintMath.max(1n, BigintMath.min(200n, paging.visibleAreaSize))
-        paging.visibleAreaTop = BigintMath.max(0n, BigintMath.min(paging.numRecords - paging.visibleAreaSize + 1n, paging.visibleAreaTop))
+        let paging = { ...get().paging, ...opts }
+        paging.visibleAreaSize = PAGE_SIZE
+        paging.visibleAreaTop = pageOffset(paging.visibleAreaTop, paging.numRecords)
         if (deepEqual(get().paging, paging)) { return }
         if (!await useEditorStore.getState().beforeUnmount()) { return }
 
         if (!preserveEditorState) { await useEditorStore.getState().discardChanges() }
-        paging.visibleAreaTop = BigintMath.max(0n, BigintMath.min(paging.numRecords - paging.visibleAreaSize + 1n, paging.visibleAreaTop))
+        paging = { ...get().paging, ...opts, visibleAreaSize: PAGE_SIZE }
+        paging.visibleAreaTop = pageOffset(paging.visibleAreaTop, paging.numRecords)
 
         // Update paging before querying the database. Otherwise the scrollbar will vibrate.
         set({ paging })
 
-        if (paging.visibleAreaSize !== previousSize) { await remote.setState("visibleAreaSize", Number(paging.visibleAreaSize)) }
         if (!withoutTableReloading) {
             await reloadTable(false, false)
         }
@@ -234,7 +243,7 @@ export const useTableStore = createStore("useTableStore", {
                 }
             })
         }),
-        getPageMax: () => BigInt(Math.ceil(Number(get().paging.numRecords) / Number(get().paging.visibleAreaSize))),
+        getPageMax: () => pageCount(get().paging.numRecords),
         requireReloading: () => { set({ reloadRequired: true }) },
         rerender: () => set({ _rerender: {} }),
         addErrorMessage: (value: string) => set((s) => ({ errorMessage: s.errorMessage + value + "\n" })),
@@ -272,9 +281,9 @@ export const useTableStore = createStore("useTableStore", {
 
 export const Table = () => {
     const tableName = useTableStore((s) => s.tableName)
-    const visibleAreaTop = useTableStore((s) => Number(s.paging.visibleAreaTop))
+    const visibleAreaTop = useTableStore((s) => s.paging.visibleAreaTop)
     const visibleAreaSize = useTableStore((s) => Number(s.paging.visibleAreaSize))
-    const numRecords = useTableStore((s) => Number(s.paging.numRecords))
+    const numRecords = useTableStore((s) => s.paging.numRecords)
     const invalidQuery = useTableStore((s) => s.invalidQuery)
     const tableInfo = useTableStore((s) => s.tableInfo)
     const autoIncrement = useTableStore((s) => s.autoIncrement)
@@ -301,19 +310,6 @@ export const Table = () => {
     }
     const tableRef = useRef<HTMLTableElement>(null)
 
-    const scrollbarRef = useRef<ScrollbarY>(null)
-    useEffect(() => {
-        if (!tableRef.current) { return }
-        const el = tableRef.current
-        const onWheel = (ev: WheelEvent) => {
-            if (ev.deltaY === 0) { return }  // Scroll horizontally
-            ev.preventDefault()
-            scrollbarRef.current!.wheel(ev.deltaY / 30)
-        }
-        el.addEventListener("wheel", onWheel, { passive: false })
-        return () => { el.removeEventListener("wheel", onWheel as any, { passive: false } as any) }
-    }, [tableRef.current])
-
     const tableType = useTableStore((s) => s.tableList.find(({ name }) => name === s.tableName)?.type)
     const foreignKeyList = useTableStore((s) => s.foreignKeyList)
 
@@ -324,7 +320,7 @@ export const Table = () => {
     return <>
         <div class="max-w-full overflow-x-auto w-max">
             {/* Table */}
-            <table ref={tableRef} class="viewer w-max border-collapse table-fixed bg-white [box-shadow:0_0_0px_2px_#000000ad]" style={{ paddingRight: scrollbarWidth }} data-testid="viewer-table">
+            <table ref={tableRef} class="viewer w-max border-collapse table-fixed bg-white [box-shadow:0_0_0px_2px_#000000ad]" data-testid="viewer-table">
                 {/* Table Header */}
                 <thead class="text-black bg-[var(--gutter-color)] [outline:rgb(181,181,181)_1px_solid]">
                     <tr>
@@ -419,26 +415,20 @@ export const Table = () => {
                 {/* Table Body */}
                 <tbody>
                     {/* Rows */}
-                    {records.map((record, row) => <TableRow selected={selectedRow === row} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={BigInt(visibleAreaTop + row) + 1n} />)}
+                    {records.map((record, row) => <TableRow selected={selectedRow === row} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(row) + 1n} />)}
 
                     {/* Margin */}
                     {/* NOTE: `visibleAreaSize - records.length` can be negative while resizing the table. */}
-                    {Array(Math.max(0, visibleAreaSize - records.length)).fill(0).map((_, row) => <EmptyTableRow key={row} row={row} columnWidths={getColumnWidths()} rowNumber={BigInt(visibleAreaTop + records.length + row) + 1n} />)}
+                    {Array(Math.max(0, visibleAreaSize - records.length)).fill(0).map((_, row) => <EmptyTableRow key={row} row={row} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(records.length + row) + 1n} />)}
                 </tbody>
             </table>
         </div>
 
-        {/* Vertical Scroll Bar */}
-        {// @ts-ignore
-            <scrollbar-y
-                ref={scrollbarRef}
-                min={0}
-                max={numRecords + 1}
-                size={visibleAreaSize}
-                value={visibleAreaTop}
-                class="h-full right-0 top-0 absolute"
-                style={{ width: scrollbarWidth }}
-                onChange={() => { setPaging({ visibleAreaTop: BigInt(Math.round(scrollbarRef.current!.value)) }).catch(console.error) }} />}
+        <nav class="flex items-center gap-2 py-2" aria-label="Data pagination">
+            <button type="button" disabled={visibleAreaTop === 0n} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop - PAGE_SIZE }).catch(console.error) }}>Previous</button>
+            <span data-testid="page-indicator">{numRecords === 0n ? "0" : (visibleAreaTop / PAGE_SIZE + 1n).toString()} / {pageCount(numRecords).toString()}</span>
+            <button type="button" disabled={visibleAreaTop + PAGE_SIZE >= numRecords} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop + PAGE_SIZE }).catch(console.error) }}>Next</button>
+        </nav>
     </>
 }
 
