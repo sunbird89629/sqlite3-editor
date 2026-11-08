@@ -347,6 +347,15 @@ dialog {
 .column-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column-picker-error { margin-top: 6px; color: var(--vscode-errorForeground, #a53030); }
 
+/* Loading and stale-result feedback for the viewer. */
+.viewer-loading-chip, .viewer-stale-chip { padding: 1px 8px; border-radius: 9px; font-size: .85em; }
+.viewer-loading-chip { background: var(--vscode-badge-background, #ddd); color: var(--vscode-badge-foreground, #333); }
+.viewer-stale-chip { background: var(--vscode-inputValidation-warningBackground, #fdf0d9); color: var(--vscode-inputValidation-warningForeground, #8a5a1b); border: 1px solid var(--vscode-inputValidation-warningBorder, #e6d3ab); }
+.viewer-refreshing table.viewer { opacity: .55; }
+.viewer-skeleton td { padding: 12px 10px; }
+.viewer-skeleton i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--td-border-color), var(--vscode-editorWidget-background, #fff), var(--td-border-color)); background-size: 200% 100%; animation: viewer-skeleton 1.1s linear infinite; }
+@keyframes viewer-skeleton { from { background-position: 0 0; } to { background-position: -200% 0; } }
+
 /* Data meta row: row count, order, filter and external-change notice. */
 .viewer-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 0 0 8px; border-bottom: 1px solid var(--td-border-color); }
 .viewer-meta-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--vscode-descriptionForeground, #777); }

@@ -40,6 +40,12 @@ export const useTableStore = createStore("useTableStore", {
     sort: null as { column: string, direction: "asc" | "desc" } | null,
     /** Case-insensitive text filter matched against every column of the viewer. Applied by the database, not in the browser. */
     filter: "",
+    /** True while the viewer is fetching rows, so that the UI can show progress and disable navigation. */
+    viewerLoading: false,
+    /** True when the displayed rows come from the last successful query after a failed one. */
+    viewerStale: false,
+    /** A statement that the query editor should show without running it (used by menu commands). */
+    pendingQuery: null as string | null,
     _rerender: {} as Record<string, never>,
     /** the list of tables in the database */
     tableList: [] as remote.TableListItem[],
@@ -71,11 +77,12 @@ export const useTableStore = createStore("useTableStore", {
     const clearViewer = () => {
         const { paging } = get()
         pageSnapshot = null
-        set({ invalidQuery: null, records: [], tableInfo: [], visibleColumns: [], paging: { ...paging, numRecords: 0n, visibleAreaTop: 0n } })
+        set({ invalidQuery: null, viewerStale: false, records: [], tableInfo: [], visibleColumns: [], paging: { ...paging, numRecords: 0n, visibleAreaTop: 0n } })
     }
     /** Queries the visible area of the database table. */
     const reloadTable = async (reloadSchema: boolean, reloadRecordCount: boolean) => {
         const generation = ++reloadGeneration
+        set({ viewerLoading: true })
         try {
             let state = get()
 
@@ -146,7 +153,7 @@ export const useTableStore = createStore("useTableStore", {
 
             // Update the store
             if (!reloadSchema) {
-                set({ records, rowIdColumn, invalidQuery: null })
+                set({ records, rowIdColumn, invalidQuery: null, viewerStale: false })
             } else {
                 if (!state.useCustomViewerQuery) {
                     const indexList = await remote.getIndexList(state.tableName!, { withoutLogging: true })
@@ -159,6 +166,7 @@ export const useTableStore = createStore("useTableStore", {
                     schemaTable = state.tableName
                     set({
                         invalidQuery: null,
+                        viewerStale: false,
                         tableInfo,
                         foreignKeyList,
                         visibleColumns: selectedColumns,
@@ -174,6 +182,7 @@ export const useTableStore = createStore("useTableStore", {
                     schemaTable = undefined
                     set({
                         invalidQuery: null,
+                        viewerStale: false,
                         tableInfo,
                         foreignKeyList: [],
                         visibleColumns: tableInfo.map(({ name }) => name),
@@ -189,8 +198,15 @@ export const useTableStore = createStore("useTableStore", {
             }
         } catch (err) {
             if (generation !== reloadGeneration) { return }
-            set({ invalidQuery: typeof err === "object" && err !== null && "message" in err ? err.message + "" : err + "" })
+            // Keep the rows that are still displayed; mark them as a previous result.
+            set({
+                invalidQuery: typeof err === "object" && err !== null && "message" in err ? err.message + "" : err + "",
+                viewerStale: get().records.length > 0,
+            })
             throw err
+        } finally {
+            // A newer request keeps the indicator visible until it finishes.
+            if (generation === reloadGeneration) { set({ viewerLoading: false }) }
         }
     }
     const setViewerQuery = async (opts: {
@@ -244,6 +260,11 @@ export const useTableStore = createStore("useTableStore", {
             await reloadTable(false, false)
         }
     }
+    /** Puts a statement into the query editor without running it. */
+    const seedQuery = async (query: string) => {
+        set({ pendingQuery: query })
+        await setViewerQuery({ useCustomViewerQuery: true })
+    }
     /** Orders the viewer rows by the given column in the database, or restores the natural order when null. */
     const setSort = async (sort: { column: string, direction: "asc" | "desc" } | null): Promise<boolean> => {
         if (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount()) { return false }
@@ -266,6 +287,7 @@ export const useTableStore = createStore("useTableStore", {
     }
     return {
         setViewerQuery,
+        seedQuery,
         setSort,
         setFilter,
         listUniqueConstraints,
@@ -274,10 +296,15 @@ export const useTableStore = createStore("useTableStore", {
         getVisibleColumnsSQL,
         setVisibleColumns: async (columns: string[]) => {
             if (columns.length === 0) { throw new Error() }
-            const { tableInfo } = get()
+            const { tableInfo, sort } = get()
             columns = [...new Set(columns)]  // remove duplicates
             if (columns.some((column) => !tableInfo.find((v) => v.name === column))) { throw new Error() }
-            set({ visibleColumns: columns.sort((a, b) => tableInfo.findIndex((v) => v.name === a) - tableInfo.findIndex((v) => v.name === b)) })
+            // A hidden column cannot stay the sort key, or the order would look unexplained.
+            const sortAfter = sort !== null && !columns.includes(sort.column) ? null : sort
+            set({
+                visibleColumns: columns.sort((a, b) => tableInfo.findIndex((v) => v.name === a) - tableInfo.findIndex((v) => v.name === b)),
+                ...(sortAfter !== sort ? { sort: null } : {}),
+            })
             await reloadTable(false, false)
         },
         /** Displays `confirm("Commit changes?")` using a `<dialog>`. */
@@ -332,6 +359,7 @@ export const Table = () => {
     const numRecords = useTableStore((s) => s.paging.numRecords)
     const sort = useTableStore((s) => s.sort)
     const setSort = useTableStore((s) => s.setSort)
+    const viewerLoading = useTableStore((s) => s.viewerLoading)
     const tableInfo = useTableStore((s) => s.tableInfo)
     const autoIncrement = useTableStore((s) => s.autoIncrement)
     const records = useTableStore((s) => s.records)
@@ -363,10 +391,12 @@ export const Table = () => {
     /** True while the pointer is dragging a column border, so that the click that ends the drag does not sort. */
     const resized = useRef(false)
 
+    const showSkeleton = viewerLoading && records.length === 0
+
     return <>
-        <div class="max-w-full overflow-x-auto w-max">
+        <div class={"max-w-full overflow-x-auto w-max" + (viewerLoading && !showSkeleton ? " viewer-refreshing" : "")} >
             {/* Table */}
-            <table ref={tableRef} class="viewer w-max border-collapse table-fixed bg-white [box-shadow:0_0_0px_2px_#000000ad]" data-testid="viewer-table">
+            <table ref={tableRef} class="viewer w-max border-collapse table-fixed bg-white [box-shadow:0_0_0px_2px_#000000ad]" data-testid="viewer-table" aria-busy={viewerLoading}>
                 {/* Table Header */}
                 <thead class="text-black bg-[var(--gutter-color)] [outline:rgb(181,181,181)_1px_solid]">
                     <tr>
@@ -467,24 +497,29 @@ export const Table = () => {
 
                 {/* Table Body */}
                 <tbody>
+                    {/* Loading placeholders, only while there is nothing to show yet. */}
+                    {showSkeleton && Array.from({ length: 10 }, (_, row) => <tr class="viewer-skeleton" key={"skeleton" + row}>
+                        <td colSpan={visibleColumns.length + 1}><i></i></td>
+                    </tr>)}
+
                     {/* Rows */}
-                    {records.map((record, row) => <TableRow selected={selectedRow === row || (previewSelection !== null && previewSelection.table === tableName && previewSelection.query === previewQuery && previewSelection.page === visibleAreaTop && previewSelection.row === row && previewSelection.record === record)} onPreview={() => setPreviewSelection({ table: tableName, query: previewQuery, page: visibleAreaTop, row, record })} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(row) + 1n} />)}
+                    {!showSkeleton && records.map((record, row) => <TableRow selected={selectedRow === row || (previewSelection !== null && previewSelection.table === tableName && previewSelection.query === previewQuery && previewSelection.page === visibleAreaTop && previewSelection.row === row && previewSelection.record === record)} onPreview={() => setPreviewSelection({ table: tableName, query: previewQuery, page: visibleAreaTop, row, record })} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(row) + 1n} />)}
 
                     {/* Margin */}
                     {/* NOTE: `visibleAreaSize - records.length` can be negative while resizing the table. */}
-                    {Array(Math.max(0, visibleAreaSize - records.length)).fill(0).map((_, row) => <EmptyTableRow key={row} row={row} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(records.length + row) + 1n} />)}
+                    {!showSkeleton && Array(Math.max(0, visibleAreaSize - records.length)).fill(0).map((_, row) => <EmptyTableRow key={row} row={row} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(records.length + row) + 1n} />)}
                 </tbody>
             </table>
         </div>
 
         <nav class="data-pagination" aria-label="Data pagination">
-            <button type="button" disabled={visibleAreaTop === 0n} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop - PAGE_SIZE }).catch(console.error) }}>Previous</button>
+            <button type="button" disabled={viewerLoading || visibleAreaTop === 0n} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop - PAGE_SIZE }).catch(console.error) }}>Previous</button>
             <span class="data-pagination-page">Page <PageInput
                 page={numRecords === 0n ? 0n : visibleAreaTop / PAGE_SIZE + 1n}
                 totalPages={pageCount(numRecords)}
-                disabled={numRecords === 0n}
+                disabled={viewerLoading || numRecords === 0n}
                 onJump={(page) => { setPaging({ visibleAreaTop: (page - 1n) * PAGE_SIZE }).catch(console.error) }} /><span aria-hidden="true"> / </span><span data-testid="page-indicator">{pageCount(numRecords).toString()}</span></span>
-            <button type="button" disabled={visibleAreaTop + PAGE_SIZE >= numRecords} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop + PAGE_SIZE }).catch(console.error) }}>Next</button>
+            <button type="button" disabled={viewerLoading || visibleAreaTop + PAGE_SIZE >= numRecords} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop + PAGE_SIZE }).catch(console.error) }}>Next</button>
             <span class="data-pagination-range">{numRecords === 0n ? "No records" : `Rows ${visibleAreaTop + 1n}–${visibleAreaTop + BigInt(records.length)}`}</span>
         </nav>
     </>
@@ -738,13 +773,13 @@ export const CellValue = ({ value }: { value: remote.SQLite3Value }) => {
             const type = result.mime
             if (type.startsWith("image/")) {
                 objectUrl = URL.createObjectURL(new Blob([value], { type }))
-                setContent({ value, node: <img class="h-max-[200px]" src={objectUrl}></img> })
+                setContent({ value, node: <img class="max-h-[200px]" src={objectUrl}></img> })
             } else if (type.startsWith("audio/")) {
                 objectUrl = URL.createObjectURL(new Blob([value], { type }))
                 setContent({ value, node: <audio class="h-[19px] w-[80%]" controls src={objectUrl}></audio> })
             } else if (type.startsWith("video/")) {
                 objectUrl = URL.createObjectURL(new Blob([value], { type }))
-                setContent({ value, node: <video class="h-max-[200px]" controls src={objectUrl}></video> })
+                setContent({ value, node: <video class="max-h-[200px]" controls src={objectUrl}></video> })
             } else {
                 setContent({ value, node: <span class="text-[var(--data-null)]">{type}: {`x'${blob2hex(value, 8)}'`}</span> })
             }

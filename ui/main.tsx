@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "preact/hooks"
 import { QueryEditor } from "./query_editor"
 import { TableSelector } from "./table_selector"
 import * as remote from "./remote"
-import { Button, flash, Highlight, persistentUseState, renderContextmenu, Select, SVGOnlyCheckbox } from "./components"
+import { Button, flash, Highlight, persistentUseState, renderContextmenu, SVGOnlyCheckbox } from "./components"
 import { escapeSQLIdentifier, Table, useTableStore } from "./table"
 import { SettingsView } from "./schema_view"
 import { onKeydown } from "./keybindings"
@@ -109,10 +109,11 @@ const App = () => {
         }
     })
     useInterval(() => {
-        if (useTableStore.getState().reloadRequired) {
-            useTableStore.getState().reloadAllTables()
-                .catch(console.error)
-        }
+        if (!useTableStore.getState().reloadRequired) { return }
+        // Never replace the rows under an unsaved edit; the notice stays until it is safe.
+        if (useEditorStore.getState().isDirty()) { return }
+        useTableStore.getState().reloadAllTables()
+            .catch(console.error)
     }, 1000)
 
     // Register keyboard shortcuts
@@ -155,6 +156,9 @@ const App = () => {
     const numRecords = useTableStore((s) => s.paging.numRecords)
     const reloadRequired = useTableStore((s) => s.reloadRequired)
     const reloadAllTables = useTableStore((s) => s.reloadAllTables)
+    const viewerLoading = useTableStore((s) => s.viewerLoading)
+    const viewerStale = useTableStore((s) => s.viewerStale)
+    const pendingQuery = useTableStore((s) => s.pendingQuery)
     const [queryDraft, setQueryDraft] = useState(customViewerQuery)
     const [queryError, setQueryError] = useState("")
     const [filterDraft, setFilterDraft] = useState(filter)
@@ -173,6 +177,12 @@ const App = () => {
     ]
 
     useEffect(() => { setQueryDraft(customViewerQuery) }, [customViewerQuery])
+    useEffect(() => {
+        if (pendingQuery === null) { return }
+        useTableStore.setState({ pendingQuery: null })
+        setQueryError("")
+        setQueryDraft(pendingQuery)
+    }, [pendingQuery])
     useEffect(() => { setFilterDraft(filter) }, [filter])
     useEffect(() => { if (useCustomViewerQuery) { queryTextareaRef.current?.focus() } }, [useCustomViewerQuery])
     useEffect(() => {
@@ -296,11 +306,8 @@ const App = () => {
                             }} data-testid="create-index-button"></SVGOnlyCheckbox>}
                             <hr />
                             <button onClick={async () => {
-                                await useTableStore.getState().setViewerQuery({
-                                    useCustomViewerQuery: true,
-                                    customViewerQuery: "SELECT * FROM pragma_journal_mode",  // PRAGMA functions require SQLite3 >=3.16.0 (2017-01-02)
-                                    tableName: useTableStore.getState().tableName,
-                                })
+                                // Only fills the query editor; running stays an explicit action.
+                                await useTableStore.getState().seedQuery("SELECT * FROM pragma_journal_mode")  // PRAGMA functions require SQLite3 >=3.16.0 (2017-01-02)
                             }}>Check Journal Mode</button>
                             <button onClick={async () => {
                                 if (!await useEditorStore.getState().beforeUnmount()) { return }
@@ -408,9 +415,11 @@ const App = () => {
         </section>
 
         <section class="data-area" aria-label="Table data and schema">
-            <div class="viewer-meta">
+            <div class="viewer-meta" style={{ display: isSettingsViewOpen && !useCustomViewerQuery ? "none" : undefined }}>
                 <div class="viewer-meta-info">
                     {useCustomViewerQuery && <span class="viewer-readonly-badge">Read-only</span>}
+                    {viewerLoading && <span class="viewer-loading-chip" role="status">Loading…</span>}
+                    {viewerStale && <span class="viewer-stale-chip">Showing the last successful result</span>}
                     <span data-testid="row-count">{numRecords.toString()} {numRecords === 1n ? "row" : "rows"}</span>
                     {sort !== null && <span class="viewer-meta-sub">· sorted by {sort.column} {sort.direction === "asc" ? "↑" : "↓"}</span>}
                     {filter.trim() !== "" && <span class="viewer-meta-sub">· filtered</span>}
