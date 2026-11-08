@@ -36,6 +36,10 @@ export const useTableStore = createStore("useTableStore", {
     customViewerQuery: "",
     /** The viewer reloads the table when the database is changed by another process when true. */
     autoReload: true,
+    /** Orders the viewer rows by this column when set. `null` keeps the natural order (rowid or the order of the custom query). */
+    sort: null as { column: string, direction: "asc" | "desc" } | null,
+    /** Case-insensitive text filter matched against every column of the viewer. Applied by the database, not in the browser. */
+    filter: "",
     _rerender: {} as Record<string, never>,
     /** the list of tables in the database */
     tableList: [] as remote.TableListItem[],
@@ -63,6 +67,12 @@ export const useTableStore = createStore("useTableStore", {
     let reloadGeneration = 0
     let schemaTable: string | undefined
     let pageSnapshot: { table: string, top: bigint, records: readonly Record<string, remote.SQLite3Value>[] } | null = null
+    /** Resets the viewer to the "nothing to show" state (no table selected, or no custom query typed yet). */
+    const clearViewer = () => {
+        const { paging } = get()
+        pageSnapshot = null
+        set({ invalidQuery: null, records: [], tableInfo: [], visibleColumns: [], paging: { ...paging, numRecords: 0n, visibleAreaTop: 0n } })
+    }
     /** Queries the visible area of the database table. */
     const reloadTable = async (reloadSchema: boolean, reloadRecordCount: boolean) => {
         const generation = ++reloadGeneration
@@ -76,15 +86,15 @@ export const useTableStore = createStore("useTableStore", {
             /** The list of columns of `SELECT * FROM subquery`. */
             let tableInfo: remote.TableInfo
             if (!state.useCustomViewerQuery) {
-                if (state.tableName === undefined) { set({ invalidQuery: "" }); return }
+                if (state.tableName === undefined) { clearViewer(); return }
                 subquery = escapeSQLIdentifier(state.tableName)
 
                 const tableListItem = state.tableList.find(({ name }) => name === state.tableName!)
-                if (tableListItem === undefined) { set({ invalidQuery: "" }); return }
+                if (tableListItem === undefined) { clearViewer(); return }
                 hasRowId = tableListItem.type === "table" && !tableListItem.wr
                 tableInfo = !reloadSchema ? get().tableInfo : await remote.getTableInfo(state.tableName, { withoutLogging: true })
             } else {
-                if (state.customViewerQuery.trim() === "") { set({ invalidQuery: "" }); return }
+                if (state.customViewerQuery.trim() === "") { clearViewer(); return }
                 subquery = `(${state.customViewerQuery})`
                 hasRowId = false
                 tableInfo = !reloadSchema ? get().tableInfo : (await remote.query(`SELECT * FROM ${subquery} LIMIT 0`, [], "r", { withoutLogging: true })).columns.map((column, i): remote.TableInfo[number] => ({ name: column, cid: BigInt(i), dflt_value: null, notnull: 0n, pk: 0n, type: "" }))
@@ -97,10 +107,22 @@ export const useTableStore = createStore("useTableStore", {
             const retainedColumns = reloadSchema && !state.useCustomViewerQuery && state.tableName === schemaTable ? state.visibleColumns.filter((name) => tableInfo.some((column) => column.name === name)) : []
             const selectedColumns = retainedColumns.length ? retainedColumns : tableInfo.map(({ name }) => name)
 
+            // Filtering happens in the database so that it applies to the whole result, not just the visible page.
+            const filterTerm = state.filter.trim()
+            const escapeLike = (term: string) => term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")
+            const filterTargets = tableInfo.map(({ name }) => name)
+            const filterParams: remote.SQLite3Value[] = filterTerm === "" || filterTargets.length === 0 ? [] : filterTargets.map(() => `%${escapeLike(filterTerm)}%`)
+            const filterSQL = filterTerm === "" || filterTargets.length === 0 ? "" : `(${filterTargets.map((name) => `CAST(${escapeSQLIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\\'`).join(" OR ")})`
+            // Sorting also happens in the database so that page 2 continues where page 1 ended.
+            const sort = state.sort !== null && tableInfo.some(({ name }) => name === state.sort!.column) ? state.sort : null
+            const orderSQL = sort !== null
+                ? ` ORDER BY ${escapeSQLIdentifier(sort.column)} ${sort.direction === "desc" ? "DESC" : "ASC"}${rowIdColumn !== null && sort.column !== rowIdColumn ? `, ${escapeSQLIdentifier(rowIdColumn)}` : ""}`
+                : rowIdColumn !== null ? ` ORDER BY ${escapeSQLIdentifier(rowIdColumn)}` : ""
+
             if (reloadSchema || reloadRecordCount) { pageSnapshot = null }
             if (generation !== reloadGeneration) { return }
             if (reloadRecordCount) {
-                const numRecords = (await remote.query(`SELECT COUNT(*) as count FROM ${subquery}`, [], "r", { withoutLogging: true })).records[0]!.count
+                const numRecords = (await remote.query(`SELECT COUNT(*) as count FROM ${subquery}${filterSQL === "" ? "" : ` WHERE ${filterSQL}`}`, filterParams, "r", { withoutLogging: true })).records[0]!.count
                 if (generation !== reloadGeneration) { return }
                 if (typeof numRecords !== "bigint") { throw new Error(numRecords + "") }
                 await setPaging({ numRecords }, undefined, true)
@@ -108,18 +130,23 @@ export const useTableStore = createStore("useTableStore", {
             }
 
             // Query the database
+            // The anchor optimization is only valid while rows are ordered by rowid.
             const delta = pageSnapshot ? state.paging.visibleAreaTop - pageSnapshot.top : 0n
-            const anchor = rowIdColumn && pageSnapshot && pageSnapshot.table === subquery && delta > 0n && delta <= BigInt(pageSnapshot.records.length) ? pageSnapshot.records[Number(delta - 1n)]?.[rowIdColumn] : undefined
+            const anchor = sort === null && rowIdColumn !== null && pageSnapshot && pageSnapshot.table === subquery && delta > 0n && delta <= BigInt(pageSnapshot.records.length) ? pageSnapshot.records[Number(delta - 1n)]?.[rowIdColumn] : undefined
             const useAnchor = typeof anchor === "bigint" || typeof anchor === "number"
-            const where = useAnchor ? ` WHERE ${escapeSQLIdentifier(rowIdColumn!)} > ?` : ""
+            const conditions: string[] = []
+            const params: remote.SQLite3Value[] = []
+            if (filterSQL !== "") { conditions.push(filterSQL); params.push(...filterParams) }
+            if (useAnchor) { conditions.push(`${escapeSQLIdentifier(rowIdColumn!)} > ?`); params.push(anchor!) }
+            const where = conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`
             const selectedSQL = reloadSchema ? (selectedColumns.length === tableInfo.length ? "*" : selectedColumns.map(escapeSQLIdentifier).join(", ")) : getVisibleColumnsSQL()
-            const records = (await remote.query(`SELECT${rowIdColumn ? ` ${escapeSQLIdentifier(rowIdColumn)} AS ${escapeSQLIdentifier(rowIdColumn)},` : ""} ${selectedSQL} FROM ${subquery}${where}${rowIdColumn ? ` ORDER BY ${escapeSQLIdentifier(rowIdColumn)}` : ""} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`, [...(useAnchor ? [anchor] : []), state.paging.visibleAreaSize, ...(useAnchor ? [] : [state.paging.visibleAreaTop])], "r", { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" })).records!
+            const records = (await remote.query(`SELECT${rowIdColumn ? ` ${escapeSQLIdentifier(rowIdColumn)} AS ${escapeSQLIdentifier(rowIdColumn)},` : ""} ${selectedSQL} FROM ${subquery}${where}${orderSQL} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`, [...params, state.paging.visibleAreaSize, ...(useAnchor ? [] : [state.paging.visibleAreaTop])], "r", { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" })).records!
             if (generation !== reloadGeneration) { return }
             pageSnapshot = { table: subquery, top: state.paging.visibleAreaTop, records }
 
             // Update the store
             if (!reloadSchema) {
-                set({ records, rowIdColumn })
+                set({ records, rowIdColumn, invalidQuery: null })
             } else {
                 if (!state.useCustomViewerQuery) {
                     const indexList = await remote.getIndexList(state.tableName!, { withoutLogging: true })
@@ -176,7 +203,8 @@ export const useTableStore = createStore("useTableStore", {
             || (opts.useCustomViewerQuery !== undefined && opts.useCustomViewerQuery !== previous.useCustomViewerQuery)
             || (opts.customViewerQuery !== undefined && opts.customViewerQuery !== previous.customViewerQuery)
         if (changed && (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount())) { return }
-        set(changed ? { ...opts, paging: { ...previous.paging, visibleAreaTop: 0n } } : opts)
+        // Sorting refers to columns of the previous result, so it is dropped when the data source changes.
+        set(changed ? { ...opts, sort: null, paging: { ...previous.paging, visibleAreaTop: 0n } } : opts)
         await remote.setState("tableName", get().tableName)
         await reloadTable(true, true)
         if (opts.useCustomViewerQuery !== undefined || opts.customViewerQuery !== undefined || opts.tableName !== undefined) {
@@ -216,6 +244,21 @@ export const useTableStore = createStore("useTableStore", {
             await reloadTable(false, false)
         }
     }
+    /** Orders the viewer rows by the given column in the database, or restores the natural order when null. */
+    const setSort = async (sort: { column: string, direction: "asc" | "desc" } | null): Promise<boolean> => {
+        if (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount()) { return false }
+        set({ sort, paging: { ...get().paging, visibleAreaTop: 0n } })
+        await reloadTable(false, false)
+        return true
+    }
+    /** Filters the viewer rows in the database so that the filter applies to the whole result, not to one page. */
+    const setFilter = async (filter: string): Promise<boolean> => {
+        if (filter === get().filter) { return true }
+        if (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount()) { return false }
+        set({ filter, paging: { ...get().paging, visibleAreaTop: 0n } })
+        await reloadTable(false, true)
+        return true
+    }
     /** Render visibleColumns to be embedded in SQL queries. */
     const getVisibleColumnsSQL = () => {
         const { tableInfo, visibleColumns } = get()
@@ -223,6 +266,8 @@ export const useTableStore = createStore("useTableStore", {
     }
     return {
         setViewerQuery,
+        setSort,
+        setFilter,
         listUniqueConstraints,
         reloadTable,
         setPaging,
@@ -285,7 +330,8 @@ export const Table = () => {
     const visibleAreaTop = useTableStore((s) => s.paging.visibleAreaTop)
     const visibleAreaSize = useTableStore((s) => Number(s.paging.visibleAreaSize))
     const numRecords = useTableStore((s) => s.paging.numRecords)
-    const invalidQuery = useTableStore((s) => s.invalidQuery)
+    const sort = useTableStore((s) => s.sort)
+    const setSort = useTableStore((s) => s.setSort)
     const tableInfo = useTableStore((s) => s.tableInfo)
     const autoIncrement = useTableStore((s) => s.autoIncrement)
     const records = useTableStore((s) => s.records)
@@ -299,7 +345,6 @@ export const Table = () => {
     const selectedDataRow = useEditorStore((s) => s.statement === "UPDATE" ? s.row : null)
     const selectedDataColumn = useEditorStore((s) => s.statement === "UPDATE" ? s.column : null)
     const beforeUnmount = useEditorStore((s) => s.beforeUnmount)
-    const isDirty = useEditorStore((s) => s.isDirty)
     const [previewSelection, setPreviewSelection] = useState<{ table: string | undefined, query: string, page: bigint, row: number, record: typeof records[number] } | null>(null)
     const previewQuery = useTableStore((s) => s.useCustomViewerQuery ? s.customViewerQuery : "")
 
@@ -315,10 +360,8 @@ export const Table = () => {
 
     const tableType = useTableStore((s) => s.tableList.find(({ name }) => name === s.tableName)?.type)
     const foreignKeyList = useTableStore((s) => s.foreignKeyList)
-
-    if (invalidQuery !== null) {
-        return <span class="text-red-700">{invalidQuery}</span>
-    }
+    /** True while the pointer is dragging a column border, so that the click that ends the drag does not sort. */
+    const resized = useRef(false)
 
     return <>
         <div class="max-w-full overflow-x-auto w-max">
@@ -330,8 +373,13 @@ export const Table = () => {
                         <th class="font-normal select-none pt-[3px] pb-[3px] pl-[1em] pr-[1em]"></th>
                         {tableInfo.filter((v) => visibleColumns.includes(v.name)).map(({ name, notnull, pk, type, dflt_value }, i) => <th
                             style={{ width: getColumnWidths()[i]! }}
-                            class={"font-normal select-none " + (tableName !== undefined && tableType === "table" ? "clickable" : "")}
-                            title={tableType === "table" ? "" : `A ${tableType} cannot be altered.`}
+                            class={"font-normal select-none clickable" + (sort?.column === name ? " sorted" : "")}
+                            title={`Sort by ${name}`}
+                            aria-sort={sort?.column === name ? (sort.direction === "asc" ? "ascending" : "descending") : undefined}
+                            onClick={() => {
+                                if (resized.current) { resized.current = false; return }
+                                setSort(sort?.column === name ? (sort.direction === "asc" ? { column: name, direction: "desc" } : null) : { column: name, direction: "asc" }).catch(console.error)
+                            }}
                             onMouseMove={(ev) => {
                                 const rect = ev.currentTarget.getBoundingClientRect()
                                 if (rect.right - ev.clientX < 20) {
@@ -342,14 +390,11 @@ export const Table = () => {
                             }}
                             onMouseDown={(ev) => {
                                 if (ev.button === 2) { return } // right click
-                                if (isDirty()) {
-                                    beforeUnmount().catch(console.error)
-                                    return  // Always return because the user needs to stop dragging when a dialog is displayed.
-                                }
 
                                 const th = ev.currentTarget
                                 const rect = th.getBoundingClientRect()
                                 if (rect.right - ev.clientX < 20) {
+                                    resized.current = true
                                     const mouseMove = (ev: MouseEvent) => {
                                         columnWidthCaches.current = produce(columnWidthCaches.current, (d) => {
                                             if (!Array.isArray(d[tableName ?? ""])) {
@@ -367,9 +412,9 @@ export const Table = () => {
                                     window.addEventListener("mouseup", () => {
                                         window.removeEventListener("mousemove", mouseMove)
                                         document.body.classList.remove("ew-resize")
+                                        // The click event fires after mouseup; keep the flag for one turn.
+                                        setTimeout(() => { resized.current = false }, 0)
                                     }, { once: true })
-                                } else if (tableName !== undefined && tableType === "table") { // center
-                                    alterTable(tableName, name).catch(console.error)
                                 }
                             }}
                             onMouseLeave={(ev) => {
@@ -377,6 +422,10 @@ export const Table = () => {
                             }}
                             onContextMenu={(ev) => {
                                 renderContextmenu(ev, <>
+                                    <button onClick={() => { setSort({ column: name, direction: "asc" }).catch(console.error) }}>Sort Ascending</button>
+                                    <button onClick={() => { setSort({ column: name, direction: "desc" }).catch(console.error) }}>Sort Descending</button>
+                                    {sort?.column === name && <button onClick={() => { setSort(null).catch(console.error) }}>Clear Sort</button>}
+                                    <hr />
                                     {tableName !== undefined && tableType === "table" && <button onClick={async () => {
                                         if (!await beforeUnmount()) { return }
                                         await alterTable(tableName, name, "RENAME COLUMN")
@@ -397,7 +446,7 @@ export const Table = () => {
                                         await setVisibleColumns(visibleColumns.filter((v) => v !== name))
                                     }}>Hide</button>
                                     <hr />
-                                    <button disabled={visibleColumns.length === 1} onClick={() => navigator.clipboard.writeText(name)}>Copy Column Name</button>
+                                    <button onClick={() => navigator.clipboard.writeText(name)}>Copy Column Name</button>
                                 </>)
                             }}>
                             <code class="inline-block [word-break:break-word] [color:inherit] [font-family:inherit] [font-size:inherit]">
@@ -411,6 +460,7 @@ export const Table = () => {
                                         .map((foreignKey) => <span> REFERENCES {escapeSQLIdentifier(foreignKey.table)}({escapeSQLIdentifier(foreignKey.from)})</span>)}
                                 </span>
                             </code>
+                            {sort?.column === name && <span class="ml-1 text-primary-highlight" aria-hidden="true">{sort.direction === "asc" ? "▲" : "▼"}</span>}
                         </th>)}
                     </tr>
                 </thead>
@@ -429,11 +479,38 @@ export const Table = () => {
 
         <nav class="data-pagination" aria-label="Data pagination">
             <button type="button" disabled={visibleAreaTop === 0n} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop - PAGE_SIZE }).catch(console.error) }}>Previous</button>
-            <span>Page <span data-testid="page-indicator">{numRecords === 0n ? "0" : (visibleAreaTop / PAGE_SIZE + 1n).toString()} / {pageCount(numRecords).toString()}</span></span>
+            <span class="data-pagination-page">Page <PageInput
+                page={numRecords === 0n ? 0n : visibleAreaTop / PAGE_SIZE + 1n}
+                totalPages={pageCount(numRecords)}
+                disabled={numRecords === 0n}
+                onJump={(page) => { setPaging({ visibleAreaTop: (page - 1n) * PAGE_SIZE }).catch(console.error) }} /><span aria-hidden="true"> / </span><span data-testid="page-indicator">{pageCount(numRecords).toString()}</span></span>
             <button type="button" disabled={visibleAreaTop + PAGE_SIZE >= numRecords} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop + PAGE_SIZE }).catch(console.error) }}>Next</button>
             <span class="data-pagination-range">{numRecords === 0n ? "No records" : `Rows ${visibleAreaTop + 1n}–${visibleAreaTop + BigInt(records.length)}`}</span>
         </nav>
     </>
+}
+
+/** Page number input; commits on Enter or blur so that typing does not reload the viewer on every key. */
+const PageInput = (props: { page: bigint, totalPages: bigint, disabled: boolean, onJump: (page: bigint) => void }) => {
+    const [draft, setDraft] = useState(props.page.toString())
+    useEffect(() => { setDraft(props.page.toString()) }, [props.page])
+    const commit = () => {
+        let value = /^\d+$/.test(draft) ? BigInt(draft) : 1n
+        value = BigintMath.max(1n, BigintMath.min(BigintMath.max(1n, props.totalPages), value))
+        setDraft(value.toString())
+        if (value !== props.page) { props.onJump(value) }
+    }
+    return <input
+        class="data-pagination-input"
+        data-testid="page-input"
+        aria-label="Go to page"
+        inputMode="numeric"
+        disabled={props.disabled}
+        value={draft}
+        onChange={(ev) => setDraft(ev.currentTarget.value.replace(/\D/g, ""))}
+        onBlur={commit}
+        onKeyDown={(ev) => { if (ev.key === "Enter") { ev.preventDefault(); commit() } }}
+    />
 }
 
 const TableRow = (props: { selected: boolean, onPreview: () => void, readonly selectedColumn: string | null, input: { readonly draftValue: JSXInternal.Element, readonly textarea: HTMLTextAreaElement | null } | null, record: { readonly [key in string]: Readonly<remote.SQLite3Value> }, rowNumber: bigint, row: number, columnWidths: readonly number[] }) => {
