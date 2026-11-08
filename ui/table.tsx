@@ -424,10 +424,11 @@ export const Table = () => {
             </table>
         </div>
 
-        <nav class="flex items-center gap-2 py-2" aria-label="Data pagination">
+        <nav class="data-pagination" aria-label="Data pagination">
             <button type="button" disabled={visibleAreaTop === 0n} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop - PAGE_SIZE }).catch(console.error) }}>Previous</button>
-            <span data-testid="page-indicator">{numRecords === 0n ? "0" : (visibleAreaTop / PAGE_SIZE + 1n).toString()} / {pageCount(numRecords).toString()}</span>
+            <span>Page <span data-testid="page-indicator">{numRecords === 0n ? "0" : (visibleAreaTop / PAGE_SIZE + 1n).toString()} / {pageCount(numRecords).toString()}</span></span>
             <button type="button" disabled={visibleAreaTop + PAGE_SIZE >= numRecords} onClick={() => { setPaging({ visibleAreaTop: visibleAreaTop + PAGE_SIZE }).catch(console.error) }}>Next</button>
+            <span class="data-pagination-range">{numRecords === 0n ? "No records" : `Rows ${visibleAreaTop + 1n}–${visibleAreaTop + BigInt(records.length)}`}</span>
         </nav>
     </>
 }

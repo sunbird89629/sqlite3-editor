@@ -332,7 +332,7 @@ export const useEditorStore = createStore("useEditorStore", {
         // Prevent loops
         if (get().statement === "UPDATE") {
             setPartial({ isTextareaDirty: false })
-        } else {
+        } else if (get().statement !== "INSERT") {
             await discardChanges()
         }
 
@@ -343,6 +343,10 @@ export const useEditorStore = createStore("useEditorStore", {
             if (get().statement === "UPDATE") { setPartial({ isTextareaDirty: true }) }
             throw error
         }
+
+        // Keep an INSERT draft until the write succeeds, then clear it before
+        // refreshing or changing page so the navigation guard does not prompt.
+        if (get().statement === "INSERT") { await discardChanges() }
 
         if (opts.reload === "allTables") {
             await useTableStore.getState().reloadAllTables(opts.selectTable)
