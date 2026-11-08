@@ -447,6 +447,25 @@ const App = () => {
                     {sort !== null && <button type="button" class="viewer-clear-sort" onClick={() => { setSort(null).catch(console.error) }} data-testid="clear-sort">Clear sort ×</button>}
                 </div>
             </div>
+            {queryResult && <section class="native-query-result" data-testid="native-query-result">
+                <div class="native-query-head">
+                    <strong>Query result</strong>
+                    <span>{queryResult.total} row(s){queryResult.total > 500 ? " (first 500 shown)" : ""}</span>
+                    <span class="native-query-actions">
+                        <Button secondary onClick={() => {
+                            const cell = (value: string) => `"${value.replaceAll('"', '""')}"`
+                            const csv = [queryResult.columns.map(cell).join(","), ...queryResult.rows.map((row) => row.map(cell).join(","))].join("\n")
+                            navigator.clipboard.writeText(csv).catch(console.error)
+                        }}>Copy CSV</Button>
+                        <Button secondary onClick={() => {
+                            const records = queryResult.rows.map((row) => Object.fromEntries(queryResult.columns.map((column, i) => [column, row[i]])))
+                            navigator.clipboard.writeText(JSON.stringify(records, null, 2)).catch(console.error)
+                        }}>Copy JSON</Button>
+                        <Button secondary onClick={() => { setQueryResult(null) }}>Close</Button>
+                    </span>
+                </div>
+                <div class="native-query-body"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
+            </section>}
             {!useCustomViewerQuery && <nav class="schema-tabs" aria-label="Table view">
                 <button type="button" class={!isSettingsViewOpen ? "active" : ""} aria-current={!isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(false)}>Data</button>
                 <button type="button" class={isSettingsViewOpen ? "active" : ""} aria-current={isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(true)} data-testid="schema-button">Schema</button>
@@ -482,11 +501,6 @@ const App = () => {
             <Button class="mt-[10px]" onClick={() => useTableStore.setState({ errorMessage: "" })}>Close</Button>
         </p>}
 
-        {/* Editor */}
-        {queryResult && <section class="p-2 border border-[var(--td-border-color)]" data-testid="native-query-result">
-            <div class="flex gap-2 items-center"><strong>Query result</strong><span>{queryResult.total} row(s){queryResult.total > 500 ? " (first 500 shown)" : ""}</span><Button secondary onClick={() => setQueryResult(null)}>Close</Button></div>
-            <div class="overflow-auto max-h-[30vh]"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
-        </section>}
         <div style={{ display: showQueryEditor ? undefined : "none" }}><QueryEditor /></div>
 
         {/* Confirmation Dialog for an unexecuted query draft */}

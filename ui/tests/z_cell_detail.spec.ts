@@ -37,6 +37,7 @@ test('cell controls are above the editor and the current draft is sent for viewi
     expect(cellText!.length).toBeLessThan(520)
     expect(cellText).toContain('…')
     await page.getByTestId('cell 0, 0').click()
+    await page.getByTestId('cell 0, 0').click()
     const input = page.getByTestId('editor-textarea')
     await expect(input).toHaveValue(savedValue)
     await expect(page.getByTestId('commit')).toBeDisabled()

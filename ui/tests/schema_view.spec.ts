@@ -51,6 +51,7 @@ test('schema hides a cell editor while keeping its draft and ignores submit shor
     })
     await page.getByRole('button', { name: 'Data', exact: true }).click()
     await page.getByTestId('cell 0, 0').click()
+    await page.getByTestId('cell 0, 0').click()
     const input = page.getByTestId('editor-textarea')
     await input.fill('pending draft')
     await page.getByRole('button', { name: 'Schema', exact: true }).click()

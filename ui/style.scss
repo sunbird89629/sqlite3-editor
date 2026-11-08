@@ -333,6 +333,32 @@ dialog {
 .viewer-empty strong { display: block; margin-bottom: 6px; color: inherit; }
 .viewer-empty p { margin-bottom: 12px; }
 
+/* Two-stage cell selection: the first click selects, the second starts editing. */
+.viewer td.selected { outline: 2px solid var(--vscode-focusBorder, #12638c); outline-offset: -2px; }
+.viewer td.selected:focus-visible { outline-offset: -2px; }
+
+/* Editor pane header with the collapse control and the save feedback. */
+#editor .editor-bar { display: flex; align-items: flex-start; gap: 6px; }
+.editor-toggle { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 6px 6px 0; font: inherit; }
+.editor-toggle:hover { background: var(--vscode-list-hoverBackground, #e9f2f5); }
+.editor-toggle:focus-visible { outline: 2px solid var(--vscode-focusBorder, #12638c); }
+.editor-status { margin-left: auto; margin-top: 12px; padding: 1px 8px; border-radius: 9px; background: var(--vscode-badge-background, #ddd); color: var(--vscode-badge-foreground, #333); font-size: .85em; }
+#editor.collapsed .editor-bar { padding-bottom: 2px; }
+
+/* Value type as a radio group. */
+.data-type-group { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.data-type-option { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; cursor: pointer; border-bottom: 1px solid transparent; }
+.data-type-option.checked { border-bottom-color: var(--td-border-color-active); }
+.data-type-option input { accent-color: var(--vscode-focusBorder, #12638c); }
+
+/* Result of a query run from the native SQL editor. */
+.native-query-result { margin-top: 10px; border: 1px solid var(--td-border-color); border-radius: 4px; background: var(--vscode-editorWidget-background, transparent); }
+.native-query-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--td-border-color); }
+.native-query-head span:first-of-type { color: var(--vscode-descriptionForeground, #777); }
+.native-query-actions { margin-left: auto; display: flex; gap: 6px; }
+.native-query-body { max-height: 30vh; overflow: auto; }
+.native-query-body th, .native-query-body td { text-align: left; white-space: nowrap; }
+
 /* Column visibility picker, anchored under the column list in `SELECT ... FROM`. */
 .column-picker { position: relative; display: inline-block; }
 .column-picker-trigger { padding: 0 6px; cursor: pointer; background: transparent; color: inherit; border: 0; border-bottom: 1px dashed var(--td-border-color-active); font: inherit; }

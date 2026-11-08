@@ -46,6 +46,12 @@ export const useTableStore = createStore("useTableStore", {
     viewerStale: false,
     /** A statement that the query editor should show without running it (used by menu commands). */
     pendingQuery: null as string | null,
+    /** The cell selected in the viewer. The first click selects; editing starts on a second click or Enter. */
+    selectedCell: null as { row: number, column: string } | null,
+    /** True while the editor pane body is hidden; the header stays visible. */
+    editorCollapsed: false,
+    /** Transient feedback shown in the editor header after a successful write. */
+    editorStatus: "",
     _rerender: {} as Record<string, never>,
     /** the list of tables in the database */
     tableList: [] as remote.TableListItem[],
@@ -77,7 +83,7 @@ export const useTableStore = createStore("useTableStore", {
     const clearViewer = () => {
         const { paging } = get()
         pageSnapshot = null
-        set({ invalidQuery: null, viewerStale: false, records: [], tableInfo: [], visibleColumns: [], paging: { ...paging, numRecords: 0n, visibleAreaTop: 0n } })
+        set({ invalidQuery: null, viewerStale: false, selectedCell: null, records: [], tableInfo: [], visibleColumns: [], paging: { ...paging, numRecords: 0n, visibleAreaTop: 0n } })
     }
     /** Queries the visible area of the database table. */
     const reloadTable = async (reloadSchema: boolean, reloadRecordCount: boolean) => {
@@ -153,7 +159,7 @@ export const useTableStore = createStore("useTableStore", {
 
             // Update the store
             if (!reloadSchema) {
-                set({ records, rowIdColumn, invalidQuery: null, viewerStale: false })
+                set({ records, rowIdColumn, invalidQuery: null, viewerStale: false, selectedCell: null })
             } else {
                 if (!state.useCustomViewerQuery) {
                     const indexList = await remote.getIndexList(state.tableName!, { withoutLogging: true })
@@ -556,6 +562,7 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly se
     const tableInfo = useTableStore((s) => s.tableInfo)
     const visibleColumns = useTableStore((s) => s.visibleColumns)
     const rowIdColumn = useTableStore((s) => s.rowIdColumn)
+    const selectedCell = useTableStore((s) => s.selectedCell)
 
     const delete_ = useEditorStore((s) => s.delete_)
     const update = useEditorStore((s) => s.update)
@@ -605,6 +612,12 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly se
         {tableInfo.filter((v) => visibleColumns.includes(v.name)).map(({ name }, i) => {
             const value = props.record[name] as remote.SQLite3Value
             const input = props.selectedColumn === name ? props.input : undefined
+            const isSelected = selectedCell?.row === props.row && selectedCell.column === name
+            const edit = async () => {
+                if (tableName === undefined) { return }
+                if (!await beforeUnmount()) { return }
+                update(tableName, name, props.row)
+            }
             const onMouseDown = async (ev: MouseEvent) => {
                 if (ev.target instanceof HTMLTextAreaElement) { return }  // in-place input
                 ev.preventDefault()
@@ -612,13 +625,28 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly se
                 const editorState = useEditorStore.getState()
                 if (editorState.statement === "UPDATE" && editorState.row === props.row && editorState.column === name) { return }
                 if (tableName === undefined) { return }
+                if (isSelected) {
+                    // The second click on the same cell starts editing.
+                    await edit()
+                    return
+                }
                 if (!await beforeUnmount()) { return }
-                update(tableName, name, props.row)
+                useTableStore.setState({ selectedCell: { row: props.row, column: name } })
+                if (ev.currentTarget instanceof HTMLElement) { ev.currentTarget.focus() }
             }
             return <td
-                class={"pl-[10px] pr-[10px] overflow-hidden border-r-[1px] border-[var(--td-border-color)] border-b-[1px] border-b-[var(--td-border-color)] " + (tableName !== undefined ? "clickable" : "") + " " + (input ? "editing" : "")}
+                class={"pl-[10px] pr-[10px] overflow-hidden border-r-[1px] border-[var(--td-border-color)] border-b-[1px] border-b-[var(--td-border-color)] " + (tableName !== undefined ? "clickable" : "") + " " + (input ? "editing" : "") + (isSelected && !input ? " selected" : "")}
                 style={{ maxWidth: props.columnWidths[i] }}
+                tabIndex={isSelected ? 0 : -1}
+                aria-selected={isSelected}
+                data-cell-selected={isSelected ? "true" : undefined}
                 onMouseDown={onMouseDown}
+                onDblClick={() => { if (!input) { edit().catch(console.error) } }}
+                onKeyDown={(ev) => {
+                    // Keys typed in the in-place input must not start a second edit.
+                    if (ev.target instanceof HTMLTextAreaElement) { return }
+                    if (ev.key === "Enter" || ev.key === "F2") { ev.preventDefault(); ev.stopPropagation(); edit().catch(console.error) }
+                }}
                 onContextMenu={(ev) => {
                     if (input?.textarea && !input.textarea.classList.contains("single-click")) { return }  // if the in-place input is visible
                     renderContextmenu(ev, <>
@@ -645,7 +673,7 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly se
                 </pre>
             </td>
         })}
-    </tr>, [props.selected, props.onPreview, props.selectedColumn, props.input?.draftValue, props.input?.textarea, tableName, tableInfo, visibleColumns, props.record, props.rowNumber, cursorVisibility])  // excluded: props.columnWidth
+    </tr>, [props.selected, props.onPreview, props.selectedColumn, props.input?.draftValue, props.input?.textarea, tableName, tableInfo, visibleColumns, props.record, props.rowNumber, cursorVisibility, selectedCell?.row, selectedCell?.column])  // excluded: props.columnWidth
 }
 
 /** Renders an empty row that is shown at the bottom of the table. */

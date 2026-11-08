@@ -33,6 +33,7 @@ test('row numbers preview saved records without discarding edits; delete remains
     expect((await top.boundingBox())!.y).toBeLessThan((await data.boundingBox())!.y)
     expect((await page.getByTestId('row number 1').boundingBox())!.height).toBeGreaterThanOrEqual(38)
     await page.getByTestId('cell 0, 1').click()
+    await page.getByTestId('cell 0, 1').click()
     await page.getByTestId('inplaceInput').fill('unsaved edit')
     await page.getByTestId('row number 1').click()
     await expect(page.getByTestId('inplaceInput')).toHaveValue('unsaved edit')

@@ -65,7 +65,8 @@ test.describe("INSERT", () => {
 
 /** Selects a cell. */
 const selectCell = async ({ page }: { page: Page }, row: number, column: number) => {
-    /* Click a cell. */await page.getByTestId(`cell ${row}, ${column}`).click()
+    /* The first click selects the cell, the second starts editing. */await page.getByTestId(`cell ${row}, ${column}`).click()
+    await page.getByTestId(`cell ${row}, ${column}`).click()
     /* Checks if the cell is selected. */await expect(page.getByTestId(`cell ${row}, ${column}`).getByTestId("inplaceInput")).toBeVisible()
     /* Check if the UPDATE editor is opened. */await expect(page.getByTestId("UPDATE")).toBeVisible()
 }

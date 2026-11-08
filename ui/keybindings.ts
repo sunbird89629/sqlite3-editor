@@ -1,5 +1,5 @@
 import { useEditorStore } from "./editor"
-import { useTableStore } from "./table"
+import { PAGE_SIZE, useTableStore } from "./table"
 import { BigintMath } from "./util"
 
 const isInSingleClickState = () => document.querySelector(".single-click") !== null
@@ -56,6 +56,30 @@ const createKeyboardShortcutMatcher = (ev: KeyboardEvent) => (pattern: `${"Ctrl 
     return ev.code === code
 }
 
+
+/** Moves the viewer selection by the given deltas, paging at the edges of the current page. */
+const moveViewerSelection = async (rowDelta: number, columnDelta: number) => {
+    const viewer = useTableStore.getState()
+    const selection = viewer.selectedCell
+    if (!selection) { return }
+    const columns = viewer.tableInfo.filter(({ name }) => viewer.visibleColumns.includes(name)).map(({ name }) => name)
+    if (columns.length === 0) { return }
+    const columnIndex = Math.max(0, columns.indexOf(selection.column))
+    const nextColumn = columns[Math.max(0, Math.min(columns.length - 1, columnIndex + columnDelta))]!
+    let nextRow = selection.row + rowDelta
+    if (nextRow < 0 && viewer.paging.visibleAreaTop > 0n) {
+        await viewer.setPaging({ visibleAreaTop: viewer.paging.visibleAreaTop - PAGE_SIZE })
+        nextRow = Number(viewer.paging.visibleAreaSize) - 1
+    } else if (nextRow >= Number(viewer.paging.visibleAreaSize) && viewer.paging.visibleAreaTop + PAGE_SIZE < viewer.paging.numRecords) {
+        await viewer.setPaging({ visibleAreaTop: viewer.paging.visibleAreaTop + PAGE_SIZE })
+        nextRow = 0
+    }
+    nextRow = Math.max(0, Math.min(useTableStore.getState().records.length - 1, nextRow))
+    useTableStore.setState({ selectedCell: { row: nextRow, column: nextColumn } })
+    // Keep the focus on the cell so that the next key press still reaches the table.
+    requestAnimationFrame(() => { document.querySelector<HTMLElement>('td[data-cell-selected="true"]')?.focus() })
+}
+
 export const onKeydown = async (ev: KeyboardEvent) => {
     if (useTableStore.getState().isConfirmDialogVisible) {
         return
@@ -71,6 +95,27 @@ export const onKeydown = async (ev: KeyboardEvent) => {
 
         const p = () => ev.preventDefault()
         const key = createKeyboardShortcutMatcher(ev)
+
+        // Viewer navigation: move between cells, start editing, or clear the selection.
+        const viewerSelection = useTableStore.getState().selectedCell
+        if (!inputFocus && state.statement !== "UPDATE" && viewerSelection !== null && state.tableName !== undefined && !useTableStore.getState().useCustomViewerQuery) {
+            if (key("Escape")) {
+                p()
+                useTableStore.setState({ selectedCell: null })
+                return
+            } else if (key("Enter") || key("F2")) {
+                p()
+                await state.update(state.tableName, viewerSelection.column, viewerSelection.row)
+                return
+            }
+            const delta = key("ArrowUp") ? [-1, 0] : key("ArrowDown") ? [1, 0] : key("ArrowLeft") ? [0, -1] : key("ArrowRight") ? [0, 1] : null
+            if (delta !== null) {
+                p()
+                await moveViewerSelection(delta[0]!, delta[1]!)
+                return
+            }
+        }
+
         if (inputFocus && key("Escape")) {
             p()
             ev.target.blur()

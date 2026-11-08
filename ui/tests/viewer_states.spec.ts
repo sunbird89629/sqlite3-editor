@@ -86,6 +86,7 @@ test('external changes wait for an unsaved edit instead of replacing it', async 
 
     // With an unsaved edit the rows stay put and the notice stays visible.
     await page.getByTestId('cell 0, 1').click()
+    await page.getByTestId('cell 0, 1').click()
     await page.getByTestId('inplaceInput').fill('draft')
     await page.evaluate(async () => {
         const remote = await (new Function('return import("/remote.ts")'))()

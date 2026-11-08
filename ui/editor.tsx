@@ -175,8 +175,10 @@ export const useEditorStore = createStore("useEditorStore", {
     const set = (state: State) => { setPartial(state) }
 
     /** Switches the editor to the ALTER TABLE editor. */
+    const expand = () => useTableStore.setState({ editorCollapsed: false })
     const alterTable = async (tableName: string, column: string | undefined, statement2?: "RENAME TO" | "RENAME COLUMN" | "ADD COLUMN" | "DROP COLUMN") => {
         unmountInput?.()
+        expand()
         set({
             statement: "ALTER TABLE",
             tableName,
@@ -192,6 +194,7 @@ export const useEditorStore = createStore("useEditorStore", {
     /** Switches the editor to the CREATE TABLE editor. */
     const createTable = (tableName: string | undefined) => {
         unmountInput?.()
+        expand()
         set({ statement: "CREATE TABLE", strict: !remote.isSQLiteOlderThan3_37, newTableName: "", tableConstraints: "", withoutRowId: false, columnDefs: [], tableName })
     }
 
@@ -213,18 +216,21 @@ export const useEditorStore = createStore("useEditorStore", {
     /** Switches the editor to the DROP TABLE editor. */
     const dropTable = (tableName: string) => {
         unmountInput?.()
+        expand()
         set({ statement: "DROP TABLE", tableName })
     }
 
     /** Switches the editor to the DROP VIEW editor. */
     const dropView = (tableName: string) => {
         unmountInput?.()
+        expand()
         set({ statement: "DROP VIEW", tableName })
     }
 
     /** Switches the editor to the INSERT editor. */
     const insert = async (tableName: string) => {
         unmountInput?.()
+        expand()
         const { tableInfo } = useTableStore.getState()
         set({
             statement: "INSERT",
@@ -253,12 +259,14 @@ export const useEditorStore = createStore("useEditorStore", {
     /** Switches the editor to the custom query editor. */
     const custom = (tableName: string | undefined, query: string = "") => {
         unmountInput?.()
+        expand()
         set({ statement: "Custom Query", query, tableName })
     }
 
     /** Switches the editor to the UPDATE editor. */
     const update = (tableName: string, column: string, row: number) => {
         unmountInput?.()
+        expand()
         const record = useTableStore.getState().records[row]!
         const value = record[column]
         const constraintChoices = useTableStore.getState().getRecordSelectors(record)
@@ -286,12 +294,14 @@ export const useEditorStore = createStore("useEditorStore", {
     /** Switches the editor to the CREATE INDEX editor. */
     const createIndex = (tableName: string) => {
         unmountInput?.()
+        expand()
         set({ statement: "CREATE INDEX", tableName, unique: false, indexName: "", indexedColumns: "", where: "" })
     }
 
     /** Switches the editor to the DROP INDEX editor. */
     const dropIndex = (tableName: string | undefined, indexName: string) => {
         unmountInput?.()
+        expand()
         set({ statement: "DROP INDEX", indexName, tableName })
     }
 
@@ -339,6 +349,7 @@ export const useEditorStore = createStore("useEditorStore", {
         // Restore the dirty flag if the write fails so the draft remains recoverable.
         try {
             await remote.query(query, params, "w+")
+            useTableStore.setState({ editorStatus: "Saved" })
         } catch (error) {
             if (get().statement === "UPDATE") { setPartial({ isTextareaDirty: true }) }
             throw error
@@ -460,6 +471,12 @@ export const useEditorStore = createStore("useEditorStore", {
         },
         cancel: async () => {
             const state = get()
+            if (state.statement === "UPDATE") {
+                // Discarding a cell edit returns to the selected cell, not to the insert form.
+                await discardChanges()
+                useTableStore.setState({ selectedCell: null, editorCollapsed: true })
+                return
+            }
             if (useTableStore.getState().useCustomViewerQuery) {
                 custom(state.tableName)
             } else if (state.tableName === undefined) {
@@ -502,7 +519,14 @@ export type OnWriteOptions = {
 
 export const Editor = () => {
     const state = useEditorStore()
+    const collapsed = useTableStore((s) => s.editorCollapsed)
+    const statusMessage = useTableStore((s) => s.editorStatus)
     const [expanded, setExpanded] = useState(false)
+    useEffect(() => {
+        if (statusMessage === "") { return }
+        const timer = setTimeout(() => { useTableStore.setState({ editorStatus: "" }) }, 2500)
+        return () => clearTimeout(timer)
+    }, [statusMessage])
     useEffect(() => { setExpanded(false) }, [state.statement, state.statement === "UPDATE" ? state.tableName : undefined, state.statement === "UPDATE" ? state.row : undefined, state.statement === "UPDATE" ? state.column : undefined])
 
     useLayoutEffect(() => {
@@ -635,7 +659,7 @@ export const Editor = () => {
                                 onBlobValueChange={(value) => { useEditorStore.setState({ blobValues: produce(state.blobValues, (d) => { d[i] = value }) }) }}
                                 onTypeChange={(type) => { useEditorStore.setState({ dataTypes: produce(state.dataTypes, (d) => { d[i] = type }) }) }}
                                 tabIndex={0} />
-                            {"AS "}<DataTypeInput value={state.dataTypes[i]!} onChange={(value) => { useEditorStore.setState({ dataTypes: produce(state.dataTypes, (d) => { d[i] = value }) }) }} />
+                            {"AS "}<DataTypeInput group={"insert-type-" + i} value={state.dataTypes[i]!} onChange={(value) => { useEditorStore.setState({ dataTypes: produce(state.dataTypes, (d) => { d[i] = value }) }) }} />
                         </li>
                     })}
                 </ul>
@@ -656,7 +680,7 @@ export const Editor = () => {
                     </select></label>
                 </span>
                 <span class="cell-editor-status" role="status">{state.isTextareaDirty ? "● Unsaved" : "● Saved"}</span>
-                <span class="cell-editor-types"><span>Type</span> <DataTypeInput value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); mountInput() }} /></span>
+                <span class="cell-editor-types"><span>Type</span> <DataTypeInput group="update-type" value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); mountInput() }} /></span>
             </span>
             const query = state.buildQuery()
             editor = <>
@@ -732,24 +756,46 @@ export const Editor = () => {
         }
     }
 
-    return <div id="editor">
-        <h2>
-            {header}
-        </h2>
-        <div class="pl-[var(--page-padding)] pr-[var(--page-padding)]">
-            {editor}
+    return <div id="editor" class={collapsed ? "collapsed" : ""}>
+        <div class="editor-bar">
+            <button
+                type="button"
+                class="editor-toggle"
+                data-testid="editor-toggle"
+                aria-expanded={!collapsed}
+                aria-label={collapsed ? "Expand the editor" : "Collapse the editor"}
+                onClick={() => { useTableStore.setState({ editorCollapsed: !collapsed }) }}>{collapsed ? "▸" : "▾"}</button>
+            <h2>
+                {header}
+            </h2>
+            {statusMessage !== "" && <span class="editor-status" aria-live="polite" data-testid="editor-status">{statusMessage}</span>}
         </div>
+        {!collapsed && <div class="editor-body pl-[var(--page-padding)] pr-[var(--page-padding)]">
+            {editor}
+        </div>}
     </div>
 }
 
-const DataTypeInput = (props: { value: EditorDataType, onChange: (value: EditorDataType) => void }) => {
-    return <>
-        <Checkbox tabIndex={-1} text="TEXT" checked={props.value === "string"} onChange={(value) => value ? props.onChange("string") : props.onChange("default")} />
-        <Checkbox tabIndex={-1} text="NUMERIC" checked={props.value === "number"} onChange={(value) => value ? props.onChange("number") : props.onChange("default")} />
-        <Checkbox tabIndex={-1} text="BLOB" checked={props.value === "blob"} onChange={(value) => value ? props.onChange("blob") : props.onChange("default")} />
-        <Checkbox tabIndex={-1} text="NULL" checked={props.value === "null"} onChange={(value) => value ? props.onChange("null") : props.onChange("default")} />
-        <Checkbox tabIndex={-1} text="DEFAULT" checked={props.value === "default"} onChange={(value) => value ? props.onChange("default") : props.onChange("default")} />
-    </>
+const dataTypeOptions: { value: EditorDataType, text: string }[] = [
+    { value: "string", text: "TEXT" },
+    { value: "number", text: "NUMERIC" },
+    { value: "blob", text: "BLOB" },
+    { value: "null", text: "NULL" },
+    { value: "default", text: "DEFAULT" },
+]
+
+/** One choice out of five, so radio buttons instead of checkboxes. */
+const DataTypeInput = (props: { value: EditorDataType, onChange: (value: EditorDataType) => void, group: string }) => {
+    return <span class="data-type-group" role="radiogroup" aria-label="Value type">
+        {dataTypeOptions.map(({ value, text }) => <label class={"data-type-option" + (props.value === value ? " checked" : "")} data-testid={`data-type ${text}`}>
+            <input
+                type="radio"
+                name={props.group}
+                checked={props.value === value}
+                onChange={() => props.onChange(value)} />
+            {text}
+        </label>)}
+    </span>
 }
 
 type EditorDataType = "string" | "number" | "null" | "blob" | "default"
