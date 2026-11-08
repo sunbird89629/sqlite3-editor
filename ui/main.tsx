@@ -10,6 +10,7 @@ import * as remote from "./remote"
 import { Button, flash, Highlight, persistentUseState, renderContextmenu, SVGOnlyCheckbox } from "./components"
 import { escapeSQLIdentifier, Table, useTableStore } from "./table"
 import { SettingsView } from "./schema_view"
+import { SqlCompletion } from "./sql_completion"
 import { onKeydown } from "./keybindings"
 // @ts-ignore
 import codiconTxt from "./codicon.txt?raw"
@@ -164,7 +165,8 @@ const App = () => {
     const [filterDraft, setFilterDraft] = useState(filter)
     const [pendingLeaveQuery, setPendingLeaveQuery] = useState(false)
     const leaveQueryDialogRef = useRef<HTMLDialogElement>(null)
-    const queryTextareaRef = useRef<HTMLTextAreaElement>(null)
+    const [queryTextarea, setQueryTextarea] = useState<HTMLTextAreaElement | null>(null)
+    const columnCache = useRef(new Map<string, string[]>())
     const filterTimer = useRef<number | undefined>(undefined)
 
     const queryDraftDirty = queryDraft.trim() !== customViewerQuery.trim() && queryDraft.trim() !== ""
@@ -184,13 +186,26 @@ const App = () => {
         setQueryDraft(pendingQuery)
     }, [pendingQuery])
     useEffect(() => { setFilterDraft(filter) }, [filter])
-    useEffect(() => { if (useCustomViewerQuery) { queryTextareaRef.current?.focus() } }, [useCustomViewerQuery])
+    useEffect(() => { if (useCustomViewerQuery) { queryTextarea?.focus() } }, [useCustomViewerQuery, queryTextarea])
     useEffect(() => {
         if (!pendingLeaveQuery) { return }
         leaveQueryDialogRef.current?.showModal()
     }, [pendingLeaveQuery])
     useEventListener("close", () => { setPendingLeaveQuery(false) }, leaveQueryDialogRef)
 
+    /** Columns of a table, cached for the completion popup. */
+    const fetchColumns = async (table: string) => {
+        const cached = columnCache.current.get(table)
+        if (cached) { return cached }
+        const state = useTableStore.getState()
+        // The viewer clears its table info in query mode, so only trust it for the table mode.
+        const local = !state.useCustomViewerQuery && state.tableName === table ? state.tableInfo.map(({ name }) => name) : undefined
+        if (local !== undefined && local.length > 0) { columnCache.current.set(table, local); return local }
+        const records = (await remote.query("SELECT name FROM pragma_table_info(?)", [table], "r", { withoutLogging: true })).records ?? []
+        const columns = records.map((record) => record.name + "")
+        columnCache.current.set(table, columns)
+        return columns
+    }
     const switchMode = (toQuery: boolean) => {
         if (toQuery === useCustomViewerQuery) { return }
         setQueryError("")
@@ -389,7 +404,7 @@ const App = () => {
                 </h2>
                 : <section class="viewer-query" aria-label="Custom query">
                     <textarea
-                        ref={queryTextareaRef}
+                        ref={setQueryTextarea}
                         class="viewer-query-sql"
                         spellcheck={false}
                         autocomplete="off"
@@ -404,10 +419,16 @@ const App = () => {
                     ></textarea>
                     {queryDraft.trim() === "" && <div class="viewer-query-examples">
                         <span>Try</span>
-                        {examples.map((sql) => <button type="button" class="viewer-query-example" key={sql} onClick={() => { setQueryDraft(sql); queryTextareaRef.current?.focus() }}>{sql}</button>)}
+                        {examples.map((sql) => <button type="button" class="viewer-query-example" key={sql} onClick={() => { setQueryDraft(sql); queryTextarea?.focus() }}>{sql}</button>)}
                     </div>}
+                    <SqlCompletion
+                        textarea={queryTextarea}
+                        tables={tableList.map(({ name }) => name)}
+                        columns={tableInfo.map(({ name }) => name)}
+                        fetchColumns={fetchColumns} />
                     <div class="viewer-query-actions">
                         <Button onClick={() => { runQuery().catch(console.error) }} data-testid="run-query">Run query<span class="opacity-60 ml-2 [font-size:70%]">Ctrl+Enter</span></Button>
+                        {remote.isVSCode && <Button secondary={true} data-testid="open-in-sql-editor" onClick={() => { remote.openNativeQuery(tableName, queryDraft).catch(console.error) }}>Open in SQL Editor</Button>}
                         <span class="viewer-query-hint">Read-only · counting a complex query can take a while</span>
                     </div>
                     {(queryError !== "" || invalidQuery !== null) && <p class="viewer-error" role="alert" data-testid="query-error">{queryError !== "" ? queryError : invalidQuery}</p>}

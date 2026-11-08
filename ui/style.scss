@@ -359,6 +359,13 @@ dialog {
 .native-query-body { max-height: 30vh; overflow: auto; }
 .native-query-body th, .native-query-body td { text-align: left; white-space: nowrap; }
 
+/* SQL completion popup for the read-only query composer. */
+.sql-completion { position: fixed; z-index: 80; min-width: 210px; max-height: 220px; overflow: auto; margin: 0; padding: 4px; list-style: none; background: var(--vscode-editorSuggestWidget-background, var(--vscode-editorWidget-background, #fff)); color: var(--vscode-editorSuggestWidget-foreground, inherit); border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-editorWidget-border, #aaa)); border-radius: 4px; box-shadow: 0 8px 24px #0002; font-family: var(--vscode-editor-font-family, monospace); }
+.sql-completion-item { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 3px; cursor: pointer; }
+.sql-completion-item.active { background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground, #cfe3ee)); color: var(--vscode-editorSuggestWidget-selectedForeground, inherit); }
+.sql-completion-kind { flex: none; width: 2.6em; text-align: center; font-size: .75em; text-transform: uppercase; opacity: .7; border: 1px solid currentColor; border-radius: 3px; }
+.sql-completion-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Column visibility picker, anchored under the column list in `SELECT ... FROM`. */
 .column-picker { position: relative; display: inline-block; }
 .column-picker-trigger { padding: 0 6px; cursor: pointer; background: transparent; color: inherit; border: 0; border-bottom: 1px dashed var(--td-border-color-active); font: inherit; }
@@ -444,3 +451,4 @@ dialog {
     button:disabled { opacity: .45; cursor: default; }
     .data-pagination-range { opacity: .7; margin-left: 4px; }
 }
+.sql-completion-label b { font-weight: 600; }

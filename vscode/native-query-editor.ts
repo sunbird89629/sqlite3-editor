@@ -139,10 +139,12 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
             const set = panels.get(db) ?? new Set<vscode.WebviewPanel>(); set.add(panel); panels.set(db, set)
             return () => { set.delete(panel); if (!set.size) { panels.delete(db) } }
         },
-        async open(db: string, tableName?: string) {
+        async open(db: string, tableName?: string, prefill?: string) {
             if (/[\r\n]/.test(db)) { throw new Error("Database paths containing line breaks cannot be used in query documents.") }
             const table = tableName ? `SELECT * FROM "${tableName.replace(/"/g, '""')}";` : "SELECT 1;"
-            const doc = await vscode.workspace.openTextDocument({ language: "sql", content: `-- database: ${db}\n\n${table}\n` })
+            // A draft from the viewer replaces the default statement, so the user continues in the full editor.
+            const body = prefill !== undefined && prefill.trim() !== "" ? prefill : table
+            const doc = await vscode.workspace.openTextDocument({ language: "sql", content: `-- database: ${db}\n\n${body}\n` })
             await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: false })
             refreshDiagnostics(doc)
             if (!connections.get(db)?.values().next().value?.hasRust) { vscode.window.showWarningMessage("The Rust backend is unavailable; SQL completion and Run links are unavailable on this platform.") }

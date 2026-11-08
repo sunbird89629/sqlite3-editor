@@ -357,8 +357,8 @@ export const activate = (context: vscode.ExtensionContext) => {
                             insertEditor.open(document.conn, draft, () => { void webviewPanel.webview.postMessage({ type: 'sqlite3-editor-inserted' }) }).then(() => res.send(packr.pack(null)), (err) => res.status(400).send((err as Error).message))
                             break
                         } case "/openNativeQuery": {
-                            const { tableName } = unpackr.unpack(body) as { tableName?: string }
-                            queryEditor.open(document.uri.fsPath, tableName).then(() => res.send(packr.pack(null)), (err) => res.status(400).send((err as Error).message))
+                            const { tableName, prefill } = unpackr.unpack(body) as { tableName?: string, prefill?: string }
+                            queryEditor.open(document.uri.fsPath, tableName, prefill).then(() => res.send(packr.pack(null)), (err) => res.status(400).send((err as Error).message))
                             break
                         } case "/openQueryFile": {
                             vscode.window.showOpenDialog({ canSelectMany: false, filters: { SQL: ["sql"] } }).then(async (uris) => {
