@@ -19,6 +19,14 @@ export const guardInsertEditor = async (): Promise<boolean> => !isVSCode || awai
 /** Opens a read-only snapshot of the current text in VS Code. */
 export const openCellInEditor = (content: string, column: string, table?: string, row?: string, source: "draft" | "saved" = "draft") => post("/openCellInEditor", { content, column, table, row, source })
 export const openRowInEditor = (content: string, table: string | undefined, row: string) => post("/openRowInEditor", { content, column: "record", table, row, source: "saved" })
+/** The cell draft that lives in the right-hand editor. */
+export type CellDraftSnapshot = { key: string, text: string, dirty: boolean, open: boolean }
+/** Opens the editable draft for one cell in the editor column right of this webview. */
+export const openCellDraft = (request: { table: string, column: string, row: string, value: string }) => post("/openCellDraft", request) as Promise<CellDraftSnapshot>
+/** Closes the draft tab. `discard` also deletes the stored draft. */
+export const closeCellDraft = (key: string, discard: boolean) => post("/closeCellDraft", { key, discard }) as Promise<CellDraftSnapshot | null>
+/** Replaces the draft text, so typing in the cell reaches the editor document. */
+export const setCellDraftText = (key: string, text: string) => post("/setCellDraftText", { key, text }) as Promise<CellDraftSnapshot>
 
 const queue: { start: number }[] = []
 

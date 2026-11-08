@@ -10,6 +10,7 @@ import { randomUUID } from "crypto"
 import { applyEdits, format, parse, ParseError } from "jsonc-parser/lib/esm/main"
 import { registerQueryEditor } from "./native-query-editor"
 import { registerInsertEditor } from "./insert-editor"
+import { registerCellEditor } from "./cell-editor"
 export { registerQueryEditor } from "./native-query-editor"
 
 const packr = new Packr({ useRecords: false, preserveNumericTypes: true })
@@ -222,6 +223,7 @@ export const activate = (context: vscode.ExtensionContext) => {
     let terminal: vscode.Terminal | undefined
     const queryEditor = registerQueryEditor(context)
     const insertEditor = registerInsertEditor(context)
+    const cellEditor = registerCellEditor(context)
     const cellSnapshots = new Map<string, string>()
     context.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider("sqlite-editor-cell", {
@@ -273,6 +275,7 @@ export const activate = (context: vscode.ExtensionContext) => {
                         dispose: () => {
                             queryEditor.removeConnection(uri.fsPath, conn)
                             insertEditor.detach(uri.fsPath, conn)
+                            void cellEditor.detach(uri.fsPath)
                             conn.close()
                             watcher.removeAllListeners()
                             watcher.close()
@@ -317,6 +320,8 @@ export const activate = (context: vscode.ExtensionContext) => {
                 webviewPanel.onDidDispose(detachInsertPanel)
                 const unregisterPanel = queryEditor.addPanel(document.uri.fsPath, webviewPanel)
                 webviewPanel.onDidDispose(unregisterPanel)
+                const unregisterCellPanel = cellEditor.addPanel(document.uri.fsPath, webviewPanel)
+                webviewPanel.onDidDispose(unregisterCellPanel)
                 context.subscriptions.push(webviewPanel.webview.onDidReceiveMessage(({ requestId, path: url, body, coalesceKey }: { requestId: number, path: string, body: Uint8Array, coalesceKey?: string }) => {
                     const res = {
                         send: (buf: Buffer | Uint8Array) => { webviewPanel.webview.postMessage({ type: "sqlite3-editor-server", requestId, body: new Uint8Array(buf) }) },
@@ -345,6 +350,30 @@ export const activate = (context: vscode.ExtensionContext) => {
                             vscode.workspace.openTextDocument(uri).then((doc) => vscode.window.showTextDocument(doc, { viewColumn: targetColumn, preview: url === "/openRowInEditor" })).then(
                                 () => res.send(packr.pack(null)),
                                 (err) => { cellSnapshots.delete(uri.toString()); res.status(400).send((err as Error).message) },
+                            )
+                            break
+                        } case "/openCellDraft": {
+                            const request = unpackr.unpack(body) as { table: unknown, column: unknown, row: unknown, value: unknown }
+                            if (typeof request?.table !== "string" || typeof request.column !== "string" || typeof request.value !== "string") { res.status(400).send("Invalid cell draft"); break }
+                            cellEditor.open(webviewPanel, document.uri.fsPath, { table: request.table, column: request.column, row: String(request.row ?? ""), value: request.value }).then(
+                                (snapshot) => res.send(packr.pack(snapshot)),
+                                (err) => res.status(400).send((err as Error).message),
+                            )
+                            break
+                        } case "/setCellDraftText": {
+                            const { key, text } = unpackr.unpack(body) as { key: unknown, text: unknown }
+                            if (typeof key !== "string" || typeof text !== "string") { res.status(400).send("Invalid cell draft text"); break }
+                            cellEditor.setText(key, text).then(
+                                (snapshot) => res.send(packr.pack(snapshot)),
+                                (err) => res.status(400).send((err as Error).message),
+                            )
+                            break
+                        } case "/closeCellDraft": {
+                            const { key, discard } = unpackr.unpack(body) as { key: unknown, discard: unknown }
+                            if (typeof key !== "string") { res.status(400).send("Invalid cell draft key"); break }
+                            cellEditor.close(key, discard === true).then(
+                                (snapshot) => res.send(packr.pack(snapshot)),
+                                (err) => res.status(400).send((err as Error).message),
                             )
                             break
                         } case "/guardInsertEditor": {

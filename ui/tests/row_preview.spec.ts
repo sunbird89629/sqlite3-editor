@@ -5,6 +5,18 @@ test('row numbers preview saved records without discarding edits; delete remains
         ;(window as any).acquireVsCodeApi = () => ({
             getState: () => undefined, setState: () => {},
             postMessage: async (request: { requestId: number, path: string, body: Uint8Array }) => {
+                const respond = (payload: Uint8Array) => window.postMessage({ type: 'sqlite3-editor-server', requestId: request.requestId, body: payload }, '*')
+                if (request.path === '/openCellDraft' || request.path === '/setCellDraftText' || request.path === '/closeCellDraft') {
+                    const helper = (window as any).msgpack
+                    const body = request.path === '/openCellDraft' ? helper.decode(request.body) : undefined
+                    respond(helper.encode({
+                        key: 'row-preview-key',
+                        text: body?.value ?? '',
+                        dirty: request.path !== '/openCellDraft',
+                        open: request.path !== '/closeCellDraft',
+                    }))
+                    return
+                }
                 if (request.path === '/guardInsertEditor' || request.path === '/openRowInEditor') {
                     if (request.path === '/openRowInEditor') { (window as any).rowPreviewRequest = request.body }
                     window.postMessage({ type: 'sqlite3-editor-server', requestId: request.requestId, body: new Uint8Array([request.path === '/guardInsertEditor' ? 0xc3 : 0xc0]) }, '*')
@@ -19,6 +31,9 @@ test('row numbers preview saved records without discarding edits; delete remains
         })
     })
     await page.goto('http://localhost:5173/')
+    await page.evaluate(async () => {
+        ;(window as any).msgpack = await (new Function('return import("/tests/message_helper.ts")')())
+    })
     await page.evaluate(async () => {
         const remote = await (new Function('return import("/remote.ts")'))()
         await remote.query('CREATE TABLE IF NOT EXISTS row_preview_test (id INTEGER PRIMARY KEY, payload TEXT, binary BLOB)', [], 'w+')

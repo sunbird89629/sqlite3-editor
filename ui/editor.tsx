@@ -52,6 +52,10 @@ type State =
             row: number
             selectedConstraint: number
             isTextareaDirty: boolean
+            /** Key of the cell draft that lives in the right-hand editor (VS Code only). */
+            draftKey: string | null
+            /** False while the draft tab is closed; the draft content is kept. */
+            draftOpen: boolean
         }
         | {
             statement: "CREATE INDEX"
@@ -98,6 +102,12 @@ const inferTypeFromInputAndColumnAffinity = (input: string, column: string): Edi
     }
 }
 
+/** Describes the row of a cell, e.g. `rowid = 2`. It identifies the cell draft in the editor. */
+const constraintLabel = (state: { record: Record<string, remote.SQLite3Value>, constraintChoices: readonly (readonly string[])[] }) => {
+    const columns = state.constraintChoices[0] ?? Object.keys(state.record)
+    return columns.map((column) => `${column} = ${unsafeEscapeValue(state.record[column] as remote.SQLite3Value)}`).join(" AND ")
+}
+
 let unmountInput: (() => void) | null = null
 
 /** Appends a `<textarea>` to a table cell. */
@@ -136,6 +146,8 @@ const mountInput = () => {
             } else {
                 useEditorStore.setState({ textareaValue: textarea.value, isTextareaDirty: true })
             }
+            // In VS Code the same text is shown in the draft document.
+            if (remote.isVSCode && state.draftKey !== null) { void remote.setCellDraftText(state.draftKey, textarea.value).catch(console.error) }
         })
         textarea.addEventListener("mousedown", (ev) => {
             if (ev.button === 2) { return }  // right click
@@ -231,6 +243,13 @@ export const useEditorStore = createStore("useEditorStore", {
     const insert = async (tableName: string) => {
         unmountInput?.()
         expand()
+        // Leaving a cell editor drops its draft in the editor column.
+        const previous = get()
+        if (previous.statement === "UPDATE" && previous.draftKey !== null && remote.isVSCode) {
+            const key = previous.draftKey
+            setPartial({ draftKey: null, draftOpen: false })
+            await remote.closeCellDraft(key, true).catch(console.error)
+        }
         const { tableInfo } = useTableStore.getState()
         set({
             statement: "INSERT",
@@ -287,8 +306,32 @@ export const useEditorStore = createStore("useEditorStore", {
             textareaValue: value === null || value instanceof Uint8Array ? "" : (value + ""),
             blobValue: value instanceof Uint8Array ? value : null,
             isTextareaDirty: false,
+            draftKey: null,
+            draftOpen: false,
         })
         mountInput()
+        if (!remote.isVSCode || type === "blob") { return }
+        // The value is edited in the right-hand editor; this panel only keeps its state.
+        const submitted = get()
+        if (submitted.statement !== "UPDATE") { return }
+        const value_ = submitted.textareaValue
+        void remote.openCellDraft({ table: tableName, column, row: constraintLabel(submitted), value: value_ }).then((draft) => {
+            const current = get()
+            if (current.statement !== "UPDATE" || current.tableName !== tableName || current.column !== column || current.row !== row) {
+                void remote.closeCellDraft(draft.key, true).catch(console.error)
+                return
+            }
+            setPartial({ draftKey: draft.key, draftOpen: draft.open, textareaValue: draft.text, isTextareaDirty: draft.dirty, type: current.type })
+        }, console.error)
+    }
+
+    /** Closes the cell draft in the editor, discarding its content. */
+    const closeDraft = async (discard: boolean) => {
+        const state = get()
+        if (state.statement !== "UPDATE" || state.draftKey === null || !remote.isVSCode) { return }
+        const key = state.draftKey
+        setPartial({ draftKey: discard ? null : key, draftOpen: false })
+        await remote.closeCellDraft(key, discard).catch(console.error)
     }
 
     /** Switches the editor to the CREATE INDEX editor. */
@@ -350,6 +393,9 @@ export const useEditorStore = createStore("useEditorStore", {
         try {
             await remote.query(query, params, "w+")
             useTableStore.setState({ editorStatus: "Saved" })
+            // The value is written, so its draft is no longer needed.
+            const written = get()
+            if (written.statement === "UPDATE" && written.draftKey !== null) { await closeDraft(true) }
         } catch (error) {
             if (get().statement === "UPDATE") { setPartial({ isTextareaDirty: true }) }
             throw error
@@ -441,6 +487,14 @@ export const useEditorStore = createStore("useEditorStore", {
         dropIndex,
         commit,
         discardChanges,
+        closeDraft,
+        /** Reopens the draft tab of the current cell without touching its content. */
+        reopenDraft: async () => {
+            const state = get()
+            if (state.statement !== "UPDATE" || !remote.isVSCode || state.type === "blob") { return }
+            const draft = await remote.openCellDraft({ table: state.tableName, column: state.column, row: constraintLabel(state), value: state.textareaValue })
+            setPartial({ draftKey: draft.key, draftOpen: draft.open, textareaValue: draft.text, isTextareaDirty: draft.dirty })
+        },
         buildQuery,
         isDirty,
         switchTable: async (tableName: string | undefined) => {
@@ -473,6 +527,7 @@ export const useEditorStore = createStore("useEditorStore", {
             const state = get()
             if (state.statement === "UPDATE") {
                 // Discarding a cell edit returns to the selected cell, not to the insert form.
+                await closeDraft(true)
                 await discardChanges()
                 useTableStore.setState({ selectedCell: null, editorCollapsed: true })
                 return
@@ -528,6 +583,19 @@ export const Editor = () => {
         return () => clearTimeout(timer)
     }, [statusMessage])
     useEffect(() => { setExpanded(false) }, [state.statement, state.statement === "UPDATE" ? state.tableName : undefined, state.statement === "UPDATE" ? state.row : undefined, state.statement === "UPDATE" ? state.column : undefined])
+
+    // The cell draft lives in the editor column; keep the panel in step with it.
+    useEffect(() => {
+        const listener = (event: MessageEvent) => {
+            const data = event.data as { type?: string, key?: string, text?: string, dirty?: boolean, open?: boolean } | undefined
+            if (data?.type !== "sqlite-editor-cell-draft" || typeof data.key !== "string" || typeof data.text !== "string") { return }
+            const current = useEditorStore.getState()
+            if (current.statement !== "UPDATE" || current.draftKey !== data.key) { return }
+            useEditorStore.setState({ textareaValue: data.text, isTextareaDirty: data.dirty === true, draftOpen: data.open === true })
+        }
+        window.addEventListener("message", listener)
+        return () => window.removeEventListener("message", listener)
+    }, [])
 
     useLayoutEffect(() => {
         if (state.statement !== "UPDATE") { return }
@@ -680,20 +748,26 @@ export const Editor = () => {
                     </select></label>
                 </span>
                 <span class="cell-editor-status" role="status">{state.isTextareaDirty ? "● Unsaved" : "● Saved"}</span>
-                <span class="cell-editor-types"><span>Type</span> <DataTypeInput group="update-type" value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); mountInput() }} /></span>
+                <span class="cell-editor-types"><span>Type</span> <DataTypeInput group="update-type" value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); if (type === "blob") { void useEditorStore.getState().closeDraft(true) }; mountInput() }} /></span>
             </span>
             const query = state.buildQuery()
+            const valueInEditor = remote.isVSCode && state.type !== "blob"
+            const typeNote = state.type === "null" ? "类型为 NULL：该单元格写入 SQL NULL，编辑区不参与。"
+                : state.type === "default" ? "类型为 DEFAULT：写入该列默认值，编辑区不参与。"
+                    : null
             editor = <>
+                {valueInEditor && <p class="cell-editor-where" data-testid="cell-editor-where">
+                    <span class="cell-editor-where-icon" aria-hidden="true">↗</span>
+                    <span class="cell-editor-where-text">{state.draftOpen ? "值在右侧编辑区编辑，不在本面板显示" : "草稿页签已关闭，内容仍保留"}</span>
+                    {!state.draftOpen && <button type="button" class="cell-editor-where-link" data-testid="reopen-cell-draft" onClick={() => { useEditorStore.getState().reopenDraft().catch(console.error) }}>重新打开</button>}
+                </p>}
+                {valueInEditor && typeNote !== null && <p class="cell-editor-where-note" data-testid="cell-editor-type-note">{typeNote}</p>}
                 <div class="cell-editor-actions flex flex-wrap items-center">
                     <Commit disabled={!state.isTextareaDirty} query={query[0]} onClick={() => { state.commit(...query).catch(console.error) }} />
                     <Cancel />
-                    {remote.isVSCode && state.type === "string" && <Button secondary class="mb-2 ml-2" onClick={() => {
-                        remote.openCellInEditor(state.textareaValue, state.column, state.tableName, `row ${state.row + 1}`, "draft").catch(console.error)
-                    }} title="Open a read-only snapshot of the current draft" data-testid="view-cell-in-editor">↗ Preview in Editor</Button>}
-                    {state.type === "string" && <Button secondary class="mb-2 ml-2" onClick={() => setExpanded(!expanded)}>{expanded ? "Collapse" : "Expand"}</Button>}
+                    {!valueInEditor && state.type === "string" && <Button secondary class="mb-2 ml-2" onClick={() => setExpanded(!expanded)}>{expanded ? "Collapse" : "Expand"}</Button>}
                 </div>
-                {remote.isVSCode && state.type === "string" && <p class="mb-2 text-gray-500">Read-only snapshot · JSON is formatted automatically · Reopen to see changes.</p>}
-                <DataEditor
+                {!valueInEditor && <DataEditor
                     expanded={expanded}
                     column={state.column}
                     rows={7}
@@ -703,7 +777,7 @@ export const Editor = () => {
                     blobValue={state.blobValue}
                     onBlobValueChange={(value) => useEditorStore.setState({ blobValue: value })}
                     onTypeChange={(type) => { useEditorStore.setState({ type }) }}
-                />
+                />}
             </>
             break
         }

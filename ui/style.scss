@@ -284,6 +284,14 @@ dialog {
 .cell-editor-types { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
 .cell-editor-types > span:first-child { color: var(--vscode-descriptionForeground, #717b80); margin-right: 4px; }
 .cell-editor-actions { padding: 2px 8px 0; }
+/* The value lives in the editor column; this strip only points at it. */
+.cell-editor-where { display: flex; align-items: center; gap: 8px; margin: 4px 8px 0; padding: 6px 9px; border: 1px dashed var(--td-border-color-hover, #c7c7c7); border-radius: 4px; color: var(--vscode-descriptionForeground, #717b80); font-size: .92em; }
+.cell-editor-where-icon { flex: none; }
+.cell-editor-where-text { flex: 1; min-width: 0; }
+.cell-editor-where-link { flex: none; border: 0; background: transparent; font: inherit; color: var(--vscode-textLink-foreground, #075985); cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.cell-editor-where-link:hover { color: var(--vscode-textLink-activeForeground, #0a6f9e); }
+.cell-editor-where-link:focus-visible { outline: 2px solid var(--vscode-focusBorder, #12638c); outline-offset: 2px; }
+.cell-editor-where-note { margin: 4px 8px 0; color: var(--vscode-descriptionForeground, #717b80); font-size: .92em; }
 #editor > div { padding-left: 8px; padding-right: 8px; }
 @media (max-width: 500px) { .cell-editor-heading { grid-template-columns: 1fr; } .cell-editor-status { grid-row: 2; } .cell-editor-row select { max-width: 65vw; } }
 
