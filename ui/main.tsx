@@ -154,6 +154,62 @@ const App = () => {
         ev.currentTarget.close()
     }
 
+    // Viewer query draft, ordering, filtering and the read-only query mode.
+    const sort = useTableStore((s) => s.sort)
+    const setSort = useTableStore((s) => s.setSort)
+    const filter = useTableStore((s) => s.filter)
+    const setFilter = useTableStore((s) => s.setFilter)
+    const invalidQuery = useTableStore((s) => s.invalidQuery)
+    const numRecords = useTableStore((s) => s.paging.numRecords)
+    const reloadRequired = useTableStore((s) => s.reloadRequired)
+    const reloadAllTables = useTableStore((s) => s.reloadAllTables)
+    const [queryDraft, setQueryDraft] = useState(customViewerQuery)
+    const [queryError, setQueryError] = useState("")
+    const [filterDraft, setFilterDraft] = useState(filter)
+    const [pendingLeaveQuery, setPendingLeaveQuery] = useState(false)
+    const leaveQueryDialogRef = useRef<HTMLDialogElement>(null)
+    const queryTextareaRef = useRef<HTMLTextAreaElement>(null)
+    const filterTimer = useRef<number | undefined>(undefined)
+
+    const queryDraftDirty = queryDraft.trim() !== customViewerQuery.trim() && queryDraft.trim() !== ""
+    const queryIsEmpty = useCustomViewerQuery && customViewerQuery.trim() === ""
+    const noTables = !useCustomViewerQuery && tableList.length === 0
+    const examples = [
+        `SELECT * FROM ${escapeSQLIdentifier(tableName ?? "table-name")}`,
+        "SELECT name, type FROM sqlite_schema WHERE type IN ('table', 'view')",
+        "SELECT * FROM pragma_journal_mode",
+    ]
+
+    useEffect(() => { setQueryDraft(customViewerQuery) }, [customViewerQuery])
+    useEffect(() => { setFilterDraft(filter) }, [filter])
+    useEffect(() => { if (useCustomViewerQuery) { queryTextareaRef.current?.focus() } }, [useCustomViewerQuery])
+    useEffect(() => {
+        if (!pendingLeaveQuery) { return }
+        leaveQueryDialogRef.current?.showModal()
+    }, [pendingLeaveQuery])
+    useEventListener("close", () => { setPendingLeaveQuery(false) }, leaveQueryDialogRef)
+
+    const switchMode = (toQuery: boolean) => {
+        if (toQuery === useCustomViewerQuery) { return }
+        setQueryError("")
+        // Leaving the query mode with an unexecuted draft asks first; the draft itself is kept either way.
+        if (!toQuery && queryDraftDirty) { setPendingLeaveQuery(true); return }
+        setViewerQuery({ useCustomViewerQuery: toQuery }).catch(console.error)
+    }
+    const applyFilter = (value: string) => {
+        window.clearTimeout(filterTimer.current)
+        setFilter(value).then((ok) => {
+            if (!ok) { setFilterDraft(useTableStore.getState().filter) }  // the draft was not applied
+        }).catch(console.error)
+    }
+    const runQuery = async () => {
+        const sql = queryDraft.trim().replace(/;\s*$/, "")
+        if (sql === "") { setQueryError("Enter a SQL query first."); return }
+        if (!/^\s*(select|with)\b/i.test(sql)) { setQueryError("The viewer is read-only. Only SELECT and WITH statements run here."); return }
+        setQueryError("")
+        await setViewerQuery({ customViewerQuery: sql }).catch(console.error)
+    }
+
     return <>
         {/* @vscode/codicons/dist/codicon.svg, https://github.com/microsoft/vscode-codicons, Attribution 4.0 International */}
         <svg xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" dangerouslySetInnerHTML={{ __html: codiconTxt }}></svg>
@@ -161,104 +217,46 @@ const App = () => {
         <LoadingIndicator />
 
         <section class="query-area" aria-label="Query and actions">
-        <div class="area-heading"><span>查询与操作</span><span>QUERY &amp; ACTIONS</span></div>
-        {/* Header `SELECT * FROM ...` */}
-        <h2 class="pt-[var(--page-padding)]">
-            <div class="mb-2">
-                {/* SELECT * FROM ... */}
-                {!useCustomViewerQuery && <>
-                    <Highlight>SELECT </Highlight>
-                    <button type="button" aria-label="Select visible columns" class="px-2 cursor-pointer hover:bg-gray-300 border-b-[1px] border-b-gray-500 focus:outline focus:outline-2" onClick={() => { columnSelectDialogRef.current?.showModal() }}>{visibleColumnsSQL}</button>
-                    <Highlight> FROM </Highlight>
-                    {tableName === undefined ? <>No tables</> : <TableSelector
-                        value={tableName}
-                        onChange={(value) => { setViewerQuery({ tableName: value }).catch(console.error) }}
-                        tables={tableList}
-                        onContextMenu={(ev) => {
-                            renderContextmenu(ev, <>
-                                <button onClick={async () => { setIsSettingsViewOpen(!isSettingsViewOpen) }}>Show Table Schema and Indexes</button>
-                                {tableType === "table" && <button onClick={async () => { useEditorStore.getState().dropTable(tableName); flash(document.querySelector("#editor")!) }}>Drop Table</button>}
-                                {tableType === "view" && <button onClick={async () => { useEditorStore.getState().dropView(tableName); flash(document.querySelector("#editor")!) }}>Drop View</button>}
-                                {tableType === "table" && <button onClick={async () => { await useEditorStore.getState().alterTable(tableName, undefined); flash(document.querySelector("#editor")!) }}>Alter Table</button>}
-                                <button onClick={async () => { useEditorStore.getState().createTable(tableName); flash(document.querySelector("#editor")!) }}>Create Table</button>
-                                {tableType === "table" && <button onClick={async () => { useEditorStore.getState().createIndex(tableName); flash(document.querySelector("#editor")!) }}>Create Index</button>}
-                                <hr />
-                                <button onClick={async () => { await navigator.clipboard.writeText(tableName); flash(document.querySelector("#editor")!) }}>Copy Table Name</button>
-                            </>)
-                        }}
-                        />}
-                    {remote.isVSCode && tableName && <Button class="ml-2" data-testid="open-insert-editor" onClick={async () => {
-                        if (!await useEditorStore.getState().beforeUnmount()) { return }
-                        const fields = useTableStore.getState().tableInfo.map(({ name, type, notnull, dflt_value }) => ({
-                            name, value: "", blob: null,
-                            type: notnull && dflt_value === null ? (["real", "int", "integer"].includes(type.toLowerCase()) ? "number" : type.toLowerCase() === "blob" ? "blob" : "string") : "default",
-                        }))
-                        await remote.post("/openInsertEditor", { table: tableName, fields }).catch(console.error)
-                    }}>+ New record</Button>}
-                </>}
+            <div class="viewer-toolbar">
+                <div class="viewer-modes" role="tablist" aria-label="Data view mode">
+                    <button type="button" role="tab" aria-selected={!useCustomViewerQuery} class={!useCustomViewerQuery ? "active" : ""} onClick={() => { switchMode(false) }} data-testid="mode-table">Table</button>
+                    <button type="button" role="tab" aria-selected={useCustomViewerQuery} class={useCustomViewerQuery ? "active" : ""} onClick={() => { switchMode(true) }} data-testid="mode-query">Custom query{queryDraftDirty && <span class="viewer-dirty-dot" title="This draft has not been run">●</span>}</button>
+                </div>
+                <div class="viewer-globals">
+                    <Button onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
 
-                {/* Custom Query */}
-                {useCustomViewerQuery && <>
-                    <input placeholder="SELECT * FROM table-name" class="w-96" value={customViewerQuery} onBlur={(ev) => { setViewerQuery({ customViewerQuery: ev.currentTarget.value }).catch(console.error) }}></input>
-                </>}
-
-                {/* The checkbox to toggle the custom query mode */}
-                <label class="ml-4 select-none cursor-pointer"><input type="checkbox" checked={useCustomViewerQuery} onChange={() => { setViewerQuery({ useCustomViewerQuery: !useCustomViewerQuery }).catch(console.error) }}></input> Custom</label>
-
-                {/* The checkbox to toggle auto reloading */}
-                <label class="select-none cursor-pointer ml-2" title="Reload the table when the database is updated by another process."><input type="checkbox" checked={autoReload} onChange={() => { useTableStore.setState({ autoReload: !autoReload }) }}></input> Auto reload</label>
-
-                {/* Buttons placed right after the table name */}
-                <div class="my-2">
-                    <Button class="mr-2" onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
-
-                    <details ref={moreActionsRef} class="inline-block relative mr-2 align-middle">
+                    <details ref={moreActionsRef} class="inline-block relative align-middle">
                         <summary class="cursor-pointer px-2 py-1 bg-gray-200 focus:outline focus:outline-2">More actions</summary>
-                        <div class="more-actions absolute z-50 min-w-[220px] p-2 bg-white border border-gray-400 shadow-lg" onClick={(event) => {
+                        <div class="more-actions absolute z-50 min-w-[240px] p-2 bg-white border border-gray-400 shadow-lg" onClick={(event) => {
                             if (event.target instanceof Element && event.target.closest("button")) {
                                 if (moreActionsRef.current) { moreActionsRef.current.open = false }
                             }
                         }}>
-                    {/* Drop Table */}
-                    {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#trash" title="Drop Table" checked={editorStatement === "DROP TABLE"} onClick={(checked) => {
-                        if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                        useEditorStore.getState().dropTable(tableName)
-                    }} data-testid="drop-table-button"></SVGOnlyCheckbox>}
-
-                    {/* Drop View */}
-                    {!useCustomViewerQuery && tableName && tableType === "view" && <SVGOnlyCheckbox icon="#trash" title="Drop View" checked={editorStatement === "DROP VIEW"} onClick={(checked) => {
-                        if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                        useEditorStore.getState().dropView(tableName)
-                    }} data-testid="drop-view-button"></SVGOnlyCheckbox>}
-
-                    {/* Alter Table */}
-                    {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#edit" title="Alter Table" checked={editorStatement === "ALTER TABLE"} onClick={(checked) => {
-                        if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                        useEditorStore.getState().alterTable(tableName, undefined).catch(console.error)
-                    }} data-testid="alter-table-button"></SVGOnlyCheckbox>}
-
-                    {/* Create Table button */}
-                    <SVGOnlyCheckbox icon="#empty-window" title="Create Table" checked={editorStatement === "CREATE TABLE"} onClick={(checked) => {
-                        if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                        useEditorStore.getState().createTable(tableName)
-                    }} data-testid="create-table-button"></SVGOnlyCheckbox>
-
-                    {/* Create Index */}
-                    {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#book" title="Create Index" checked={editorStatement === "CREATE INDEX"} onClick={(checked) => {
-                        if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                        useEditorStore.getState().createIndex(tableName)
-                    }} data-testid="create-index-button"></SVGOnlyCheckbox>}
-
-                    <SVGOnlyCheckbox icon="#terminal" title="Custom Query" checked={editorStatement === "Custom Query"} onClick={(checked) => {
-                        if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                        useEditorStore.getState().custom(tableName)
-                    }} data-testid="custom-query-button"></SVGOnlyCheckbox>
-
-                        </div>
-                    </details>
-                    {/* Tools */}
-                    <SVGOnlyCheckbox icon="#tools" title="Other Tools" onClick={(_, ev) => {
-                        renderContextmenu(ev, <>
+                            <label class="more-actions-check" title="Reload the view when the database is changed by another process.">
+                                <input type="checkbox" checked={autoReload} onChange={() => { useTableStore.setState({ autoReload: !autoReload }) }}></input> Auto reload
+                            </label>
+                            <hr />
+                            {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#trash" title="Drop Table" checked={editorStatement === "DROP TABLE"} onClick={(checked) => {
+                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
+                                useEditorStore.getState().dropTable(tableName)
+                            }} data-testid="drop-table-button"></SVGOnlyCheckbox>}
+                            {!useCustomViewerQuery && tableName && tableType === "view" && <SVGOnlyCheckbox icon="#trash" title="Drop View" checked={editorStatement === "DROP VIEW"} onClick={(checked) => {
+                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
+                                useEditorStore.getState().dropView(tableName)
+                            }} data-testid="drop-view-button"></SVGOnlyCheckbox>}
+                            {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#edit" title="Alter Table" checked={editorStatement === "ALTER TABLE"} onClick={(checked) => {
+                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
+                                useEditorStore.getState().alterTable(tableName, undefined).catch(console.error)
+                            }} data-testid="alter-table-button"></SVGOnlyCheckbox>}
+                            <SVGOnlyCheckbox icon="#empty-window" title="Create Table" checked={editorStatement === "CREATE TABLE"} onClick={(checked) => {
+                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
+                                useEditorStore.getState().createTable(tableName)
+                            }} data-testid="create-table-button"></SVGOnlyCheckbox>
+                            {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#book" title="Create Index" checked={editorStatement === "CREATE INDEX"} onClick={(checked) => {
+                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
+                                useEditorStore.getState().createIndex(tableName)
+                            }} data-testid="create-index-button"></SVGOnlyCheckbox>}
+                            <hr />
                             <button onClick={async () => {
                                 await useTableStore.getState().setViewerQuery({
                                     useCustomViewerQuery: true,
@@ -281,33 +279,131 @@ const App = () => {
                             <button onClick={() => remote.openTerminal(`sqlite3 {{databasePath}} .dump > out.sql`)}>Export Tables to SQL…</button>
                             <hr />
                             <button onClick={() => remote.openTerminal(`{{install sqlite-utils &&}}{{pythonPath}} -m sqlite_utils duplicate {{databasePath}} ${escapeShell(tableName || "table-name")} ${escapeShell((tableName || "table-name") + "-copy")}`)}>Copy Table…</button>
-                        </>)
-                    }}></SVGOnlyCheckbox>
-
+                        </div>
+                    </details>
                 </div>
             </div>
-        </h2>
 
-        <div class="query-operation" style={{ display: (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
+            {!useCustomViewerQuery
+                ? <h2 class="pt-[var(--page-padding)]">
+                    <div class="mb-2">
+                        <Highlight>SELECT </Highlight>
+                        <button type="button" aria-label="Select visible columns" class="px-2 cursor-pointer hover:bg-gray-300 border-b-[1px] border-b-gray-500 focus:outline focus:outline-2" onClick={() => { columnSelectDialogRef.current?.showModal() }}>{visibleColumnsSQL}</button>
+                        <Highlight> FROM </Highlight>
+                        {tableName === undefined ? <>No tables</> : <TableSelector
+                            value={tableName}
+                            onChange={(value) => { setViewerQuery({ tableName: value }).catch(console.error) }}
+                            tables={tableList}
+                            onContextMenu={(ev) => {
+                                renderContextmenu(ev, <>
+                                    <button onClick={async () => { setIsSettingsViewOpen(!isSettingsViewOpen) }}>Show Table Schema and Indexes</button>
+                                    {tableType === "table" && <button onClick={async () => { useEditorStore.getState().dropTable(tableName); flash(document.querySelector("#editor")!) }}>Drop Table</button>}
+                                    {tableType === "view" && <button onClick={async () => { useEditorStore.getState().dropView(tableName); flash(document.querySelector("#editor")!) }}>Drop View</button>}
+                                    {tableType === "table" && <button onClick={async () => { await useEditorStore.getState().alterTable(tableName, undefined); flash(document.querySelector("#editor")!) }}>Alter Table</button>}
+                                    <button onClick={async () => { useEditorStore.getState().createTable(tableName); flash(document.querySelector("#editor")!) }}>Create Table</button>
+                                    {tableType === "table" && <button onClick={async () => { useEditorStore.getState().createIndex(tableName); flash(document.querySelector("#editor")!) }}>Create Index</button>}
+                                    <hr />
+                                    <button onClick={async () => { await navigator.clipboard.writeText(tableName); flash(document.querySelector("#editor")!) }}>Copy Table Name</button>
+                                </>)
+                            }}
+                            />}
+                        {remote.isVSCode && tableName && <Button class="ml-2" data-testid="open-insert-editor" onClick={async () => {
+                            if (!await useEditorStore.getState().beforeUnmount()) { return }
+                            const fields = useTableStore.getState().tableInfo.map(({ name, type, notnull, dflt_value }) => ({
+                                name, value: "", blob: null,
+                                type: notnull && dflt_value === null ? (["real", "int", "integer"].includes(type.toLowerCase()) ? "number" : type.toLowerCase() === "blob" ? "blob" : "string") : "default",
+                            }))
+                            await remote.post("/openInsertEditor", { table: tableName, fields }).catch(console.error)
+                        }}>+ New record</Button>}
+                    </div>
+                </h2>
+                : <section class="viewer-query" aria-label="Custom query">
+                    <textarea
+                        ref={queryTextareaRef}
+                        class="viewer-query-sql"
+                        spellcheck={false}
+                        autocomplete="off"
+                        placeholder="SELECT * FROM table-name"
+                        aria-label="Custom query SQL"
+                        data-testid="custom-query-input"
+                        value={queryDraft}
+                        onInput={(ev) => { setQueryDraft(ev.currentTarget.value); setQueryError("") }}
+                        onKeyDown={(ev) => {
+                            if (ev.ctrlKey && ev.code === "Enter") { ev.preventDefault(); ev.stopPropagation(); runQuery().catch(console.error) }
+                        }}
+                    ></textarea>
+                    {queryDraft.trim() === "" && <div class="viewer-query-examples">
+                        <span>Try</span>
+                        {examples.map((sql) => <button type="button" class="viewer-query-example" key={sql} onClick={() => { setQueryDraft(sql); queryTextareaRef.current?.focus() }}>{sql}</button>)}
+                    </div>}
+                    <div class="viewer-query-actions">
+                        <Button onClick={() => { runQuery().catch(console.error) }} data-testid="run-query">Run query<span class="opacity-60 ml-2 [font-size:70%]">Ctrl+Enter</span></Button>
+                        <span class="viewer-query-hint">Read-only · counting a complex query can take a while</span>
+                    </div>
+                    {(queryError !== "" || invalidQuery !== null) && <p class="viewer-error" role="alert" data-testid="query-error">{queryError !== "" ? queryError : invalidQuery}</p>}
+                </section>}
+
+            <div class="query-operation" style={{ display: (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
         </section>
 
         <section class="data-area" aria-label="Table data and schema">
-        <div class="area-heading"><span>表格与结构</span><span>{!useCustomViewerQuery ? tableName : "Custom query"}</span></div>
-        {!useCustomViewerQuery && <nav class="schema-tabs" aria-label="Table view">
-            <button type="button" class={!isSettingsViewOpen ? "active" : ""} aria-current={!isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(false)}>Data</button>
-            <button type="button" class={isSettingsViewOpen ? "active" : ""} aria-current={isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(true)} data-testid="schema-button">Schema</button>
-        </nav>}
-        {/* Schema and Index */}
-        {isSettingsViewOpen && !useCustomViewerQuery && <SettingsView onBack={() => setIsSettingsViewOpen(false)} />}
-
-        {/* Table */}
-        {(!isSettingsViewOpen || useCustomViewerQuery) && <>
-            <div ref={tableRef} class="relative w-max max-w-full pl-[var(--page-padding)] pr-[var(--page-padding)]">
-                <Table />
+            <div class="viewer-meta">
+                <div class="viewer-meta-info">
+                    {useCustomViewerQuery && <span class="viewer-readonly-badge">Read-only</span>}
+                    <span data-testid="row-count">{numRecords.toString()} {numRecords === 1n ? "row" : "rows"}</span>
+                    {sort !== null && <span class="viewer-meta-sub">· sorted by {sort.column} {sort.direction === "asc" ? "↑" : "↓"}</span>}
+                    {filter.trim() !== "" && <span class="viewer-meta-sub">· filtered</span>}
+                    {reloadRequired && <span class="viewer-external">⚠ Changed outside the editor<button type="button" onClick={() => { reloadAllTables().catch(console.error) }} data-testid="reload-external">Reload</button></span>}
+                </div>
+                <div class="viewer-meta-actions">
+                    <input
+                        class="viewer-filter"
+                        aria-label="Filter rows"
+                        placeholder="Filter rows…"
+                        data-testid="viewer-filter"
+                        value={filterDraft}
+                        disabled={noTables || queryIsEmpty}
+                        onInput={(ev) => {
+                            const value = ev.currentTarget.value
+                            setFilterDraft(value)
+                            window.clearTimeout(filterTimer.current)
+                            filterTimer.current = window.setTimeout(() => { applyFilter(value) }, 250)
+                        }}
+                        onKeyDown={(ev) => {
+                            if (ev.key === "Enter") { ev.preventDefault(); window.clearTimeout(filterTimer.current); applyFilter(filterDraft) }
+                        }}
+                        onBlur={() => { window.clearTimeout(filterTimer.current); applyFilter(filterDraft) }}
+                    />
+                    {sort !== null && <button type="button" class="viewer-clear-sort" onClick={() => { setSort(null).catch(console.error) }} data-testid="clear-sort">Clear sort ×</button>}
+                </div>
             </div>
+            {!useCustomViewerQuery && <nav class="schema-tabs" aria-label="Table view">
+                <button type="button" class={!isSettingsViewOpen ? "active" : ""} aria-current={!isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(false)}>Data</button>
+                <button type="button" class={isSettingsViewOpen ? "active" : ""} aria-current={isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(true)} data-testid="schema-button">Schema</button>
+            </nav>}
+            {/* Schema and Index */}
+            {isSettingsViewOpen && !useCustomViewerQuery && <SettingsView onBack={() => setIsSettingsViewOpen(false)} />}
 
-        </>}
-
+            {/* Table */}
+            {(!isSettingsViewOpen || useCustomViewerQuery) && <>
+                {noTables
+                    ? <div class="viewer-empty" data-testid="empty-tables">
+                        <strong>This database has no tables</strong>
+                        <p>Create a table to start browsing records.</p>
+                        <Button onClick={() => { useEditorStore.getState().createTable(undefined) }}>Create table</Button>
+                    </div>
+                    : queryIsEmpty
+                        ? <div class="viewer-empty" data-testid="empty-query">
+                            <strong>Run a query to see results</strong>
+                            <p>Type a read-only SQL statement above, or pick one of the examples.</p>
+                        </div>
+                        : <>
+                            {!useCustomViewerQuery && invalidQuery !== null && <p class="viewer-error" role="alert">{invalidQuery}</p>}
+                            <div ref={tableRef} class="relative w-max max-w-full pl-[var(--page-padding)] pr-[var(--page-padding)]">
+                                <Table />
+                            </div>
+                        </>}
+            </>}
         </section>
 
         {/* Error Message */}
@@ -322,6 +418,16 @@ const App = () => {
             <div class="overflow-auto max-h-[30vh]"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
         </section>}
         <div style={{ display: showQueryEditor ? undefined : "none" }}><QueryEditor /></div>
+
+        {/* Confirmation Dialog for an unexecuted query draft */}
+        <dialog class="py-4 px-8 bg-gray-100 shadow-lg mx-auto mt-[10vh]" ref={leaveQueryDialogRef}>
+            <h2 class="pb-2 pl-0 text-center [font-size:120%]">This query has not been run</h2>
+            <p class="pb-3 text-center">The draft is kept, and you can continue editing it next time.</p>
+            <div class="float-right">
+                <Button class="mr-1" onClick={() => { setPendingLeaveQuery(false); leaveQueryDialogRef.current?.close() }} data-testid="query-dialog > keep-editing">Keep editing</Button>
+                <Button secondary={true} onClick={() => { setPendingLeaveQuery(false); leaveQueryDialogRef.current?.close(); setViewerQuery({ useCustomViewerQuery: false }).catch(console.error) }} data-testid="query-dialog > keep-draft">Keep draft and go back</Button>
+            </div>
+        </dialog>
 
         {/* Confirmation Dialog */}
         <dialog class="py-4 px-8 bg-gray-100 shadow-lg mx-auto mt-[10vh]" ref={confirmDialogRef}>
