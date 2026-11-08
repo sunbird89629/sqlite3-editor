@@ -7,13 +7,13 @@ import { useEffect, useRef, useState } from "preact/hooks"
 import { QueryEditor } from "./query_editor"
 import { TableSelector } from "./table_selector"
 import * as remote from "./remote"
-import { Button, Checkbox, flash, Highlight, persistentUseState, renderContextmenu, Select, SVGOnlyCheckbox } from "./components"
+import { Button, flash, Highlight, persistentUseState, renderContextmenu, Select, SVGOnlyCheckbox } from "./components"
 import { escapeSQLIdentifier, Table, useTableStore } from "./table"
 import { SettingsView } from "./schema_view"
 import { onKeydown } from "./keybindings"
 // @ts-ignore
 import codiconTxt from "./codicon.txt?raw"
-import { useBoolean, useEventListener, useInterval } from "usehooks-ts"
+import { useEventListener, useInterval } from "usehooks-ts"
 import type { JSXInternal } from "preact/src/jsx"
 
 export type VSCodeAPI = {
@@ -73,7 +73,6 @@ const App = () => {
     const [isSettingsViewOpen, setIsSettingsViewOpen] = persistentUseState("isSettingsViewOpen", false)
     const confirmDialogRef = useRef<HTMLDialogElement>(null)
     const tableRef = useRef<HTMLDivElement>(null)
-    const columnSelectDialogRef = useRef<HTMLDialogElement>(null)
     const moreActionsRef = useRef<HTMLDetailsElement>(null)
 
     useEffect(() => {
@@ -146,13 +145,6 @@ const App = () => {
         }
     }, { current: document.body })
 
-    const closeOnClickOutside = (ev: JSXInternal.TargetedMouseEvent<HTMLDialogElement>) => {
-        if (/* undefined or 0 */!ev.clientX || !ev.clientY) { return }
-        const rect = ev.currentTarget.getBoundingClientRect()
-        if (rect.left <= ev.clientX && ev.clientX < rect.right &&
-            rect.top <= ev.clientY && ev.clientY < rect.bottom) { return }
-        ev.currentTarget.close()
-    }
 
     // Viewer query draft, ordering, filtering and the read-only query mode.
     const sort = useTableStore((s) => s.sort)
@@ -208,6 +200,52 @@ const App = () => {
         if (!/^\s*(select|with)\b/i.test(sql)) { setQueryError("The viewer is read-only. Only SELECT and WITH statements run here."); return }
         setQueryError("")
         await setViewerQuery({ customViewerQuery: sql }).catch(console.error)
+    }
+
+    // Column visibility picker, anchored under the column list in `SELECT ... FROM`.
+    const visibleColumns = useTableStore((s) => s.visibleColumns)
+    const setVisibleColumns = useTableStore((s) => s.setVisibleColumns)
+    const tableInfo = useTableStore((s) => s.tableInfo)
+    const [columnPickerOpen, setColumnPickerOpen] = useState(false)
+    const [columnPickerError, setColumnPickerError] = useState(false)
+    const columnPickerRef = useRef<HTMLDivElement>(null)
+    const columnPickerTriggerRef = useRef<HTMLButtonElement>(null)
+
+    useEffect(() => {
+        setColumnPickerOpen(false)
+        setColumnPickerError(false)
+    }, [useCustomViewerQuery, tableName])
+    useEffect(() => {
+        if (!columnPickerOpen) { return }
+        columnPickerRef.current?.querySelector<HTMLInputElement>("input")?.focus()
+        const close = () => { setColumnPickerOpen(false); setColumnPickerError(false) }
+        const onPointerDown = (ev: PointerEvent) => {
+            const target = ev.target as Node
+            if (columnPickerRef.current?.contains(target) || columnPickerTriggerRef.current?.contains(target)) { return }
+            close()
+        }
+        const onKeyDown = (ev: KeyboardEvent) => {
+            if (ev.key !== "Escape") { return }
+            ev.preventDefault()
+            ev.stopPropagation()
+            close()
+            columnPickerTriggerRef.current?.focus()
+        }
+        document.addEventListener("pointerdown", onPointerDown)
+        document.addEventListener("keydown", onKeyDown, true)
+        return () => {
+            document.removeEventListener("pointerdown", onPointerDown)
+            document.removeEventListener("keydown", onKeyDown, true)
+        }
+    }, [columnPickerOpen])
+    const toggleColumn = async (name: string) => {
+        setColumnPickerError(false)
+        if (visibleColumns.includes(name)) {
+            if (visibleColumns.length === 1) { setColumnPickerError(true); return }
+            await setVisibleColumns(visibleColumns.filter((column) => column !== name))
+        } else {
+            await setVisibleColumns([...visibleColumns, name])
+        }
     }
 
     return <>
@@ -288,7 +326,30 @@ const App = () => {
                 ? <h2 class="pt-[var(--page-padding)]">
                     <div class="mb-2">
                         <Highlight>SELECT </Highlight>
-                        <button type="button" aria-label="Select visible columns" class="px-2 cursor-pointer hover:bg-gray-300 border-b-[1px] border-b-gray-500 focus:outline focus:outline-2" onClick={() => { columnSelectDialogRef.current?.showModal() }}>{visibleColumnsSQL}</button>
+                        <span class="column-picker">
+                            <button
+                                type="button"
+                                ref={columnPickerTriggerRef}
+                                aria-label="Select visible columns"
+                                aria-haspopup="dialog"
+                                aria-expanded={columnPickerOpen}
+                                data-testid="column-picker-trigger"
+                                class="column-picker-trigger"
+                                onClick={() => { setColumnPickerOpen(!columnPickerOpen); setColumnPickerError(false) }}>{visibleColumnsSQL}</button>
+                            {columnPickerOpen && <div ref={columnPickerRef} class="column-picker-popover" role="dialog" aria-label="Visible columns" data-testid="column-picker">
+                                <div class="column-picker-title">Visible columns</div>
+                                <div class="column-picker-list">
+                                    {tableInfo.map(({ name }) => <label class="column-picker-item" data-testid={`column-picker-item ${name}`}>
+                                        <input
+                                            type="checkbox"
+                                            checked={visibleColumns.includes(name)}
+                                            onChange={() => { toggleColumn(name).catch(console.error) }} />
+                                        <span class="column-picker-name">{name}</span>
+                                    </label>)}
+                                </div>
+                                {columnPickerError && <p class="column-picker-error" role="status">Keep at least one column visible.</p>}
+                            </div>}
+                        </span>
                         <Highlight> FROM </Highlight>
                         {tableName === undefined ? <>No tables</> : <TableSelector
                             value={tableName}
@@ -439,42 +500,10 @@ const App = () => {
             </div>
         </dialog>
 
-        {/* SELECT dialog */}
-        <dialog class="py-4 px-8 bg-gray-100 shadow-lg mx-auto mt-[10vh]" ref={columnSelectDialogRef} onClick={closeOnClickOutside}>
-            <SelectedColumnEditor />
-        </dialog>
-
         <dialog
             id="contextmenu"
             class="contextmenu"
             onClick={(ev) => { ev.currentTarget.close() }}></dialog>
-    </>
-}
-
-const SelectedColumnEditor = () => {
-    const visibleColumns = useTableStore((s) => s.visibleColumns)
-    const tableInfo = useTableStore((s) => s.tableInfo)
-    const setVisibleColumns = useTableStore((s) => s.setVisibleColumns)
-    const error = useBoolean()
-    return <>
-        <Highlight>SELECT </Highlight>
-        {tableInfo.map(({ name }, i) => <>{i !== 0 && ", "}<Checkbox
-            checked={visibleColumns.includes(name)}
-            onChange={async (checked) => {
-                error.setFalse()
-                if (checked) {
-                    await setVisibleColumns([...visibleColumns, name])
-                } else {
-                    if (visibleColumns.length === 1) {
-                        error.setTrue()
-                        return
-                    }
-                    await setVisibleColumns(visibleColumns.filter((v) => v !== name))
-                }
-            }}
-            text={name}
-            class="mr-0" /></>)}
-        {error.value && <p class="text-red-700 mt-1">Please select at least one column.</p>}
     </>
 }
 

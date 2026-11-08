@@ -333,6 +333,20 @@ dialog {
 .viewer-empty strong { display: block; margin-bottom: 6px; color: inherit; }
 .viewer-empty p { margin-bottom: 12px; }
 
+/* Column visibility picker, anchored under the column list in `SELECT ... FROM`. */
+.column-picker { position: relative; display: inline-block; }
+.column-picker-trigger { padding: 0 6px; cursor: pointer; background: transparent; color: inherit; border: 0; border-bottom: 1px dashed var(--td-border-color-active); font: inherit; }
+.column-picker-trigger:hover { background: var(--vscode-list-hoverBackground, #e9f2f5); }
+.column-picker-trigger:focus-visible { outline: 2px solid var(--vscode-focusBorder, #12638c); outline-offset: 1px; }
+.column-picker-popover { position: absolute; left: 0; top: calc(100% + 6px); z-index: 60; min-width: 210px; max-height: 320px; overflow: auto; padding: 8px; background: var(--vscode-editorWidget-background, #fff); color: var(--vscode-editorWidget-foreground, #222); border: 1px solid var(--vscode-editorWidget-border, #aaa); border-radius: 5px; box-shadow: 0 8px 24px #0002; font-family: var(--vscode-font-family, sans-serif); }
+.column-picker-title { padding: 2px 4px 6px; color: var(--vscode-descriptionForeground, #777); font-size: .85em; font-weight: 600; letter-spacing: .04em; }
+.column-picker-list { display: flex; flex-direction: column; }
+.column-picker-item { display: flex; align-items: center; gap: 7px; padding: 5px 4px; border-radius: 3px; cursor: pointer; }
+.column-picker-item:hover { background: var(--vscode-list-hoverBackground, #e9f2f5); }
+.column-picker-item input { accent-color: var(--vscode-focusBorder, #12638c); }
+.column-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column-picker-error { margin-top: 6px; color: var(--vscode-errorForeground, #a53030); }
+
 /* Data meta row: row count, order, filter and external-change notice. */
 .viewer-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 0 0 8px; border-bottom: 1px solid var(--td-border-color); }
 .viewer-meta-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--vscode-descriptionForeground, #777); }
