@@ -331,7 +331,7 @@ export const activate = (context: vscode.ExtensionContext) => {
                         } case "/downloadState": {
                             res.send(packr.pack(Object.fromEntries(context.workspaceState.keys().map((key) => [key, context.workspaceState.get(key)]))))
                             break
-                        } case "/openCellInEditor": {
+                        } case "/openCellInEditor": case "/openRowInEditor": {
                             const { content, column, table, row, source } = unpackr.unpack(body) as { content: unknown, column: unknown, table?: string, row?: string, source?: string }
                             if (typeof content !== "string" || typeof column !== "string") { res.status(400).send("Invalid cell content"); break }
                             const errors: ParseError[] = []
@@ -341,7 +341,8 @@ export const activate = (context: vscode.ExtensionContext) => {
                             const name = [table, row, column, source === "saved" ? "saved snapshot" : "draft snapshot"].filter(Boolean).join(" · ").replace(/[\\/\x00-\x1f:*?"<>|]/g, "_").slice(0, 160) || "cell snapshot"
                             const uri = vscode.Uri.from({ scheme: "sqlite-editor-cell", path: `/${randomUUID()}/${name}.${isJSON ? "json" : "txt"}` })
                             cellSnapshots.set(uri.toString(), text)
-                            vscode.workspace.openTextDocument(uri).then((doc) => vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: false })).then(
+                            const targetColumn = url === "/openRowInEditor" && webviewPanel.viewColumn !== undefined ? webviewPanel.viewColumn + 1 : vscode.ViewColumn.Beside
+                            vscode.workspace.openTextDocument(uri).then((doc) => vscode.window.showTextDocument(doc, { viewColumn: targetColumn, preview: url === "/openRowInEditor" })).then(
                                 () => res.send(packr.pack(null)),
                                 (err) => { cellSnapshots.delete(uri.toString()); res.status(400).send((err as Error).message) },
                             )

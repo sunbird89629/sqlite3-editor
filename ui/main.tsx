@@ -160,6 +160,8 @@ const App = () => {
 
         <LoadingIndicator />
 
+        <section class="query-area" aria-label="Query and actions">
+        <div class="area-heading"><span>查询与操作</span><span>QUERY &amp; ACTIONS</span></div>
         {/* Header `SELECT * FROM ...` */}
         <h2 class="pt-[var(--page-padding)]">
             <div class="mb-2">
@@ -286,6 +288,11 @@ const App = () => {
             </div>
         </h2>
 
+        <div class="query-operation" style={{ display: (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
+        </section>
+
+        <section class="data-area" aria-label="Table data and schema">
+        <div class="area-heading"><span>表格与结构</span><span>{!useCustomViewerQuery ? tableName : "Custom query"}</span></div>
         {!useCustomViewerQuery && <nav class="schema-tabs" aria-label="Table view">
             <button type="button" class={!isSettingsViewOpen ? "active" : ""} aria-current={!isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(false)}>Data</button>
             <button type="button" class={isSettingsViewOpen ? "active" : ""} aria-current={isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(true)} data-testid="schema-button">Schema</button>
@@ -301,6 +308,8 @@ const App = () => {
 
         </>}
 
+        </section>
+
         {/* Error Message */}
         {errorMessage && <p class="text-error-fg bg-error-bg [padding:10px]">
             <pre class="whitespace-pre-wrap [font-size:inherit] overflow-auto h-28">{errorMessage}</pre>
@@ -313,7 +322,6 @@ const App = () => {
             <div class="overflow-auto max-h-[30vh]"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
         </section>}
         <div style={{ display: showQueryEditor ? undefined : "none" }}><QueryEditor /></div>
-        <div style={{ display: (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
 
         {/* Confirmation Dialog */}
         <dialog class="py-4 px-8 bg-gray-100 shadow-lg mx-auto mt-[10vh]" ref={confirmDialogRef}>

@@ -300,6 +300,8 @@ export const Table = () => {
     const selectedDataColumn = useEditorStore((s) => s.statement === "UPDATE" ? s.column : null)
     const beforeUnmount = useEditorStore((s) => s.beforeUnmount)
     const isDirty = useEditorStore((s) => s.isDirty)
+    const [previewSelection, setPreviewSelection] = useState<{ table: string | undefined, query: string, page: bigint, row: number, record: typeof records[number] } | null>(null)
+    const previewQuery = useTableStore((s) => s.useCustomViewerQuery ? s.customViewerQuery : "")
 
     const columnWidthCaches = persistentRef<Record<string, (number | undefined | null)[]>>("columnWidths_v3", {})
     const getColumnWidths = () => {
@@ -416,7 +418,7 @@ export const Table = () => {
                 {/* Table Body */}
                 <tbody>
                     {/* Rows */}
-                    {records.map((record, row) => <TableRow selected={selectedRow === row} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(row) + 1n} />)}
+                    {records.map((record, row) => <TableRow selected={selectedRow === row || (previewSelection !== null && previewSelection.table === tableName && previewSelection.query === previewQuery && previewSelection.page === visibleAreaTop && previewSelection.row === row && previewSelection.record === record)} onPreview={() => setPreviewSelection({ table: tableName, query: previewQuery, page: visibleAreaTop, row, record })} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(row) + 1n} />)}
 
                     {/* Margin */}
                     {/* NOTE: `visibleAreaSize - records.length` can be negative while resizing the table. */}
@@ -434,7 +436,7 @@ export const Table = () => {
     </>
 }
 
-const TableRow = (props: { selected: boolean, readonly selectedColumn: string | null, input: { readonly draftValue: JSXInternal.Element, readonly textarea: HTMLTextAreaElement | null } | null, record: { readonly [key in string]: Readonly<remote.SQLite3Value> }, rowNumber: bigint, row: number, columnWidths: readonly number[] }) => {
+const TableRow = (props: { selected: boolean, onPreview: () => void, readonly selectedColumn: string | null, input: { readonly draftValue: JSXInternal.Element, readonly textarea: HTMLTextAreaElement | null } | null, record: { readonly [key in string]: Readonly<remote.SQLite3Value> }, rowNumber: bigint, row: number, columnWidths: readonly number[] }) => {
     if (props.rowNumber <= 0) {
         throw new Error(props.rowNumber + "")
     }
@@ -450,18 +452,29 @@ const TableRow = (props: { selected: boolean, readonly selectedColumn: string | 
     const [cursorVisibility, setCursorVisibility] = useState(true)
     const onFocusOrMount = useCallback(() => { setCursorVisibility(true) }, [])
     const onBlurOrUnmount = useCallback(() => { setCursorVisibility(false) }, [])
+    const preview = () => {
+        const record = Object.fromEntries(tableInfo.map(({ name }) => [name, props.record[name]]))
+        const content = JSON.stringify(record, (_key, value) => {
+            if (typeof value === "bigint") { const number = Number(value); return Number.isSafeInteger(number) ? number : { type: "INTEGER", value: value.toString() } }
+            if (value instanceof Uint8Array) { return { type: "BLOB", hex: blob2hex(value) } }
+            return value
+        }, 2)
+        props.onPreview()
+        if (remote.isVSCode) { remote.openRowInEditor(content, tableName, `row ${props.rowNumber}`).catch(console.error) }
+        else {
+            const url = URL.createObjectURL(new Blob([content], { type: "application/json" }))
+            window.open(url, "_blank", "noopener")
+            setTimeout(() => URL.revokeObjectURL(url), 60000)
+        }
+    }
 
     return useMemo(() => <tr class={props.selected ? "editing" : ""}>
         {/* Row number */}
         <td
-            class={"pl-[10px] pr-[10px] bg-[var(--gutter-color)] overflow-hidden sticky left-0 whitespace-nowrap text-right text-black select-none border-r-[1px] border-r-[var(--td-border-color)] " + (tableName !== undefined ? "clickable" : "")}
-            onMouseDown={async (ev) => {
-                if (ev.button === 2) { return } // context menu
-                ev.preventDefault()
-                if (tableName === undefined) { return }
-                if (!await beforeUnmount()) { return }
-                await delete_(tableName, props.record, props.row)
-            }}
+            class="pl-[10px] pr-[10px] bg-[var(--gutter-color)] overflow-hidden sticky left-0 whitespace-nowrap text-right text-black select-none border-r-[1px] border-r-[var(--td-border-color)] clickable"
+            role="button" tabIndex={0} aria-label={`Preview row ${props.rowNumber}`}
+            onClick={preview}
+            onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); preview() } }}
             onContextMenu={(ev) => {
                 renderContextmenu(ev, <>
                     <button onClick={async () => {
@@ -520,7 +533,7 @@ const TableRow = (props: { selected: boolean, readonly selectedColumn: string | 
                 </pre>
             </td>
         })}
-    </tr>, [props.selected, props.selectedColumn, props.input?.draftValue, props.input?.textarea, tableName, tableInfo, visibleColumns, props.record, props.rowNumber, cursorVisibility])  // excluded: props.columnWidth
+    </tr>, [props.selected, props.onPreview, props.selectedColumn, props.input?.draftValue, props.input?.textarea, tableName, tableInfo, visibleColumns, props.record, props.rowNumber, cursorVisibility])  // excluded: props.columnWidth
 }
 
 /** Renders an empty row that is shown at the bottom of the table. */

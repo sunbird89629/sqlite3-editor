@@ -18,6 +18,7 @@ export const openNativeQuery = (tableName: string | undefined) => post("/openNat
 export const guardInsertEditor = async (): Promise<boolean> => !isVSCode || await post('/guardInsertEditor', {}) === true
 /** Opens a read-only snapshot of the current text in VS Code. */
 export const openCellInEditor = (content: string, column: string, table?: string, row?: string, source: "draft" | "saved" = "draft") => post("/openCellInEditor", { content, column, table, row, source })
+export const openRowInEditor = (content: string, table: string | undefined, row: string) => post("/openRowInEditor", { content, column: "record", table, row, source: "saved" })
 
 const queue: { start: number }[] = []
 
