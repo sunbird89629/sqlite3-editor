@@ -311,6 +311,8 @@ const App = () => {
                             }}>Check Journal Mode</button>
                             <button onClick={async () => {
                                 if (!await useEditorStore.getState().beforeUnmount()) { return }
+                                // The statement is committed from the editor pane, which the query mode hides.
+                                await useTableStore.getState().setViewerQuery({ useCustomViewerQuery: false })
                                 useEditorStore.getState().custom(undefined, "PRAGMA journal_mode=WAL")
                                 flash(document.querySelector("#editor")!)
                             }}>Enable WAL Mode…</button>
@@ -411,7 +413,7 @@ const App = () => {
                     {(queryError !== "" || invalidQuery !== null) && <p class="viewer-error" role="alert" data-testid="query-error">{queryError !== "" ? queryError : invalidQuery}</p>}
                 </section>}
 
-            <div class="query-operation" style={{ display: (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
+            <div class="query-operation" style={{ display: useCustomViewerQuery || (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
         </section>
 
         <section class="data-area" aria-label="Table data and schema">

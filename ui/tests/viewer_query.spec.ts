@@ -64,6 +64,9 @@ test('custom query mode runs on demand and keeps its draft and last result', asy
     await page.getByTestId('mode-query').click()
     await expect(page.getByTestId('empty-query')).toBeVisible()
     await expect(page.getByTestId('viewer-table')).toHaveCount(0)
+    // The writable editor pane is hidden here; the composer is the only query input.
+    await expect(page.locator('#editor')).toBeHidden()
+    await expect(page.getByTestId('custom-query-input')).toBeVisible()
 
     // Running a query shows its result and marks the tab as read-only data.
     await page.getByTestId('custom-query-input').fill('SELECT id, name FROM sort_filter_test ORDER BY id')
