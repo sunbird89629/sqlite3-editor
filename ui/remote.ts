@@ -15,6 +15,7 @@ const unpackr = new Unpackr({ largeBigIntToFloat: false, int64AsNumber: false, m
 const vscode = window.acquireVsCodeApi?.()
 export const isVSCode = vscode !== undefined
 export const openNativeQuery = (tableName: string | undefined) => post("/openNativeQuery", { tableName })
+export const guardInsertEditor = async (): Promise<boolean> => !isVSCode || await post('/guardInsertEditor', {}) === true
 /** Opens a read-only snapshot of the current text in VS Code. */
 export const openCellInEditor = (content: string, column: string, table?: string, row?: string, source: "draft" | "saved" = "draft") => post("/openCellInEditor", { content, column, table, row, source })
 

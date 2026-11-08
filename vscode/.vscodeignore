@@ -10,6 +10,12 @@ build-rust.cjs
 node_modules
 extension.ts
 native-query-editor.ts
+insert-editor.ts
+insert-draft.ts
+insert-editor-test.cjs
+insert-draft-test.cjs
+insert-editor-host-test.cjs
+insert-editor-restart-host-test.cjs
 sqlite-keywords.ts
 native_query_host_test.cjs
 tsconfig.json

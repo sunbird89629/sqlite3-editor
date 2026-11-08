@@ -175,6 +175,7 @@ export const useTableStore = createStore("useTableStore", {
         const changed = (opts.tableName !== undefined && opts.tableName !== previous.tableName)
             || (opts.useCustomViewerQuery !== undefined && opts.useCustomViewerQuery !== previous.useCustomViewerQuery)
             || (opts.customViewerQuery !== undefined && opts.customViewerQuery !== previous.customViewerQuery)
+        if (changed && (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount())) { return }
         set(changed ? { ...opts, paging: { ...previous.paging, visibleAreaTop: 0n } } : opts)
         await remote.setState("tableName", get().tableName)
         await reloadTable(true, true)
@@ -202,7 +203,7 @@ export const useTableStore = createStore("useTableStore", {
         paging.visibleAreaSize = PAGE_SIZE
         paging.visibleAreaTop = pageOffset(paging.visibleAreaTop, paging.numRecords)
         if (deepEqual(get().paging, paging)) { return }
-        if (!await useEditorStore.getState().beforeUnmount()) { return }
+        if (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount()) { return }
 
         if (!preserveEditorState) { await useEditorStore.getState().discardChanges() }
         paging = { ...get().paging, ...opts, visibleAreaSize: PAGE_SIZE }

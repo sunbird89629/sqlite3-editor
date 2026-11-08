@@ -9,6 +9,7 @@ import os from "os"
 import { randomUUID } from "crypto"
 import { applyEdits, format, parse, ParseError } from "jsonc-parser/lib/esm/main"
 import { registerQueryEditor } from "./native-query-editor"
+import { registerInsertEditor } from "./insert-editor"
 export { registerQueryEditor } from "./native-query-editor"
 
 const packr = new Packr({ useRecords: false, preserveNumericTypes: true })
@@ -220,6 +221,7 @@ const findPython = async () => {
 export const activate = (context: vscode.ExtensionContext) => {
     let terminal: vscode.Terminal | undefined
     const queryEditor = registerQueryEditor(context)
+    const insertEditor = registerInsertEditor(context)
     const cellSnapshots = new Map<string, string>()
     context.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider("sqlite-editor-cell", {
@@ -270,6 +272,7 @@ export const activate = (context: vscode.ExtensionContext) => {
                         unsupportedScheme: false,
                         dispose: () => {
                             queryEditor.removeConnection(uri.fsPath, conn)
+                            insertEditor.detach(uri.fsPath, conn)
                             conn.close()
                             watcher.removeAllListeners()
                             watcher.close()
@@ -310,6 +313,8 @@ export const activate = (context: vscode.ExtensionContext) => {
                     .replace(/((?:src|href)=")\/([^"]+)(")/g, (_, m1, m2, m3) => m1 + webviewPanel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "webview", m2)).toString() + m3)
 
                 const panelId = Math.random().toString(36)
+                const detachInsertPanel = insertEditor.attach(document.uri.fsPath, document.conn, () => { void webviewPanel.webview.postMessage({ type: 'sqlite3-editor-inserted' }) })
+                webviewPanel.onDidDispose(detachInsertPanel)
                 const unregisterPanel = queryEditor.addPanel(document.uri.fsPath, webviewPanel)
                 webviewPanel.onDidDispose(unregisterPanel)
                 context.subscriptions.push(webviewPanel.webview.onDidReceiveMessage(({ requestId, path: url, body, coalesceKey }: { requestId: number, path: string, body: Uint8Array, coalesceKey?: string }) => {
@@ -340,6 +345,15 @@ export const activate = (context: vscode.ExtensionContext) => {
                                 () => res.send(packr.pack(null)),
                                 (err) => { cellSnapshots.delete(uri.toString()); res.status(400).send((err as Error).message) },
                             )
+                            break
+                        } case "/guardInsertEditor": {
+                            insertEditor.guard(document.uri.fsPath).then((allowed) => res.send(packr.pack(allowed)), (err) => res.status(400).send((err as Error).message))
+                            break
+                        } case "/openInsertEditor": {
+                            const draft = unpackr.unpack(body) as import('./insert-draft').InsertDraft
+                            if (!draft || typeof draft.table !== 'string' || !Array.isArray(draft.fields)) { res.status(400).send('Invalid insert draft'); break }
+                            draft.database = document.uri.fsPath
+                            insertEditor.open(document.conn, draft, () => { void webviewPanel.webview.postMessage({ type: 'sqlite3-editor-inserted' }) }).then(() => res.send(packr.pack(null)), (err) => res.status(400).send((err as Error).message))
                             break
                         } case "/openNativeQuery": {
                             const { tableName } = unpackr.unpack(body) as { tableName?: string }

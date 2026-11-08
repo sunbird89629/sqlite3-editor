@@ -5,6 +5,10 @@ test('cell controls are above the editor and the current draft is sent for viewi
         ;(window as any).acquireVsCodeApi = () => ({
             getState: () => undefined, setState: () => {},
             postMessage: async (request: { requestId: number, path: string, body: Uint8Array }) => {
+                if (request.path === '/guardInsertEditor') {
+                    window.postMessage({ type: 'sqlite3-editor-server', requestId: request.requestId, body: new Uint8Array([0xc3]) }, '*')
+                    return
+                }
                 if (request.path === '/openCellInEditor') {
                     ;(window as any).cellViewRequest = request.body
                     window.postMessage({ type: 'sqlite3-editor-server', requestId: request.requestId, body: new Uint8Array([0xc0]) }, '*')

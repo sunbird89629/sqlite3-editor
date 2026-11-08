@@ -1,7 +1,7 @@
 {
   "name": "vscode-sqlite3-editor",
   "displayName": "SQLite3 Editor",
-  "version": "3.0.11",
+  "version": "3.0.12",
   "description": "Edit SQLite3 files like you would in Excel.",
   "main": "extension.js",
   "publisher": "yy0931",
@@ -25,6 +25,7 @@
   ],
   "activationEvents": [
     "onCustomEditor:sqlite3-editor.editor",
+    "onCustomEditor:sqlite3-editor.insert",
     "onLanguage:sql"
   ],
   "contributes": {
@@ -52,6 +53,16 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "sqlite3-editor.insert",
+        "displayName": "SQLite3 Insert Record",
+        "selector": [
+          {
+            "filenamePattern": "*.sqlite-insert-draft"
+          }
+        ],
+        "priority": "option"
       }
     ]
   },

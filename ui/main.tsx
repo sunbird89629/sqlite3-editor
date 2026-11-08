@@ -79,6 +79,7 @@ const App = () => {
     useEffect(() => {
         const listener = (event: MessageEvent) => {
             if (event.data?.type === "sqlite3-editor-query-result") { setQueryResult(event.data) }
+            if (event.data?.type === "sqlite3-editor-inserted") { useTableStore.getState().reloadAllTables().catch(console.error) }
         }
         window.addEventListener("message", listener)
         return () => window.removeEventListener("message", listener)
@@ -184,6 +185,14 @@ const App = () => {
                             </>)
                         }}
                         />}
+                    {remote.isVSCode && tableName && <Button class="ml-2" data-testid="open-insert-editor" onClick={async () => {
+                        if (!await useEditorStore.getState().beforeUnmount()) { return }
+                        const fields = useTableStore.getState().tableInfo.map(({ name, type, notnull, dflt_value }) => ({
+                            name, value: "", blob: null,
+                            type: notnull && dflt_value === null ? (["real", "int", "integer"].includes(type.toLowerCase()) ? "number" : type.toLowerCase() === "blob" ? "blob" : "string") : "default",
+                        }))
+                        await remote.post("/openInsertEditor", { table: tableName, fields }).catch(console.error)
+                    }}>+ New record</Button>}
                 </>}
 
                 {/* Custom Query */}
@@ -304,7 +313,7 @@ const App = () => {
             <div class="overflow-auto max-h-[30vh]"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
         </section>}
         <div style={{ display: showQueryEditor ? undefined : "none" }}><QueryEditor /></div>
-        <div style={{ display: isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE") ? "none" : undefined }}><Editor /></div>
+        <div style={{ display: (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
 
         {/* Confirmation Dialog */}
         <dialog class="py-4 px-8 bg-gray-100 shadow-lg mx-auto mt-[10vh]" ref={confirmDialogRef}>
