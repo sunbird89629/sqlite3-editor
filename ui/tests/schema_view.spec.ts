@@ -65,6 +65,6 @@ test('schema hides a cell editor while keeping its draft and ignores submit shor
     await page.getByRole('button', { name: 'Data', exact: true }).click()
     await expect(input).toBeVisible()
     await expect(input).toHaveValue('pending draft')
-    await expect(page.getByRole('status')).toContainText('Unsaved')
+    await expect(page.getByTestId('commit')).toBeEnabled()
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
 })

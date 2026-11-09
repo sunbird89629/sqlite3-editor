@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 
-test('the cell value lives in the right-hand editor and the panel keeps only identity, type and actions', async ({ page }) => {
+test('the cell value lives in the right-hand editor and the panel keeps only the type and the actions', async ({ page }) => {
     await page.addInitScript(() => {
         const draft = { key: 'draft-key', text: '', open: true, dirty: false }
         const draftRequests: unknown[] = []
@@ -72,18 +72,15 @@ test('the cell value lives in the right-hand editor and the panel keeps only ide
     await page.getByTestId('cell 0, 0').click()
 
     // The value is not rendered in the panel any more.
-    await expect(page.getByTestId('cell-editor-where')).toContainText('值在右侧编辑区编辑，不在本面板显示')
     await expect(page.getByTestId('editor-textarea')).toHaveCount(0)
     const opened = await page.evaluate(() => (window as any).cellDrafts.draftRequests)
     expect(opened).toEqual([{ table: 'cell_detail_test', column: 'payload', row: expect.stringMatching(/rowid = 1|row 1/), value: savedValue }])
     await expect(page.getByTestId('commit')).toBeDisabled()
-    await expect(page.getByRole('status')).toContainText('Saved')
 
     // Typing in the editor document marks the panel dirty.
     const draft = '{"id":9223372036854775807,"items":[1,2]}'
     await page.evaluate((text) => { window.postMessage({ type: 'sqlite-editor-cell-draft', key: 'draft-key', text, dirty: true, open: true }, '*') }, draft)
     await expect(page.getByTestId('commit')).toBeEnabled()
-    await expect(page.getByRole('status')).toContainText('Unsaved')
 
     // Commit writes the draft text and drops the draft.
     await page.getByTestId('commit').click()
@@ -94,13 +91,11 @@ test('the cell value lives in the right-hand editor and the panel keeps only ide
     })).toBe(draft)
     expect(await page.evaluate(() => (window as any).cellDrafts.closeRequests)).toEqual([{ key: 'draft-key', discard: true }])
 
-    // A closed editor tab keeps the draft and can be reopened.
+    // A closed editor tab keeps the draft content, so the panel stays dirty.
     await page.getByTestId('cell 0, 0').click()
     await page.getByTestId('cell 0, 0').click()
     await page.evaluate(() => { window.postMessage({ type: 'sqlite-editor-cell-draft', key: 'draft-key', text: 'kept', dirty: true, open: false }, '*') })
-    await expect(page.getByTestId('cell-editor-where')).toContainText('草稿页签已关闭')
-    await page.getByTestId('reopen-cell-draft').click()
-    await expect.poll(async () => (await page.evaluate(() => (window as any).cellDrafts.draftRequests.length))).toBe(3)
+    await expect(page.getByTestId('commit')).toBeEnabled()
 
     // Cancel discards the draft.
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()

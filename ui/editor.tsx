@@ -488,13 +488,6 @@ export const useEditorStore = createStore("useEditorStore", {
         commit,
         discardChanges,
         closeDraft,
-        /** Reopens the draft tab of the current cell without touching its content. */
-        reopenDraft: async () => {
-            const state = get()
-            if (state.statement !== "UPDATE" || !remote.isVSCode || state.type === "blob") { return }
-            const draft = await remote.openCellDraft({ table: state.tableName, column: state.column, row: constraintLabel(state), value: state.textareaValue })
-            setPartial({ draftKey: draft.key, draftOpen: draft.open, textareaValue: draft.text, isTextareaDirty: draft.dirty })
-        },
         buildQuery,
         isDirty,
         switchTable: async (tableName: string | undefined) => {
@@ -739,28 +732,13 @@ export const Editor = () => {
             break
         }
         case "UPDATE": {
-            header = <span class="cell-editor-heading">
-                <span class="cell-editor-location">
-                    <span class="cell-editor-caption" data-testid="UPDATE">EDIT CELL</span>
-                    <span class="cell-editor-path">{state.tableName} <span aria-hidden="true">/</span> {state.column}</span>
-                    <label class="cell-editor-row">Row <select aria-label="Select row identifier" value={state.selectedConstraint} onChange={(ev) => { useEditorStore.setState({ selectedConstraint: +ev.currentTarget.value }) }}>
-                        {state.constraintChoices.map((columns, i) => <option value={i}>{columns.map((column) => `${column} = ${unsafeEscapeValue(state.record[column] as remote.SQLite3Value)}`).join(" AND ")}</option>)}
-                    </select></label>
-                </span>
-                <span class="cell-editor-status" role="status">{state.isTextareaDirty ? "● Unsaved" : "● Saved"}</span>
-                <span class="cell-editor-types"><span>Type</span> <DataTypeInput group="update-type" value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); if (type === "blob") { void useEditorStore.getState().closeDraft(true) }; mountInput() }} /></span>
-            </span>
+            header = <span class="cell-editor-types" data-testid="UPDATE"><span>Type</span> <DataTypeInput group="update-type" value={state.type} onChange={(type) => { useEditorStore.setState({ type, isTextareaDirty: true }); if (type === "blob") { void useEditorStore.getState().closeDraft(true) }; mountInput() }} /></span>
             const query = state.buildQuery()
             const valueInEditor = remote.isVSCode && state.type !== "blob"
             const typeNote = state.type === "null" ? "类型为 NULL：该单元格写入 SQL NULL，编辑区不参与。"
                 : state.type === "default" ? "类型为 DEFAULT：写入该列默认值，编辑区不参与。"
                     : null
             editor = <>
-                {valueInEditor && <p class="cell-editor-where" data-testid="cell-editor-where">
-                    <span class="cell-editor-where-icon" aria-hidden="true">↗</span>
-                    <span class="cell-editor-where-text">{state.draftOpen ? "值在右侧编辑区编辑，不在本面板显示" : "草稿页签已关闭，内容仍保留"}</span>
-                    {!state.draftOpen && <button type="button" class="cell-editor-where-link" data-testid="reopen-cell-draft" onClick={() => { useEditorStore.getState().reopenDraft().catch(console.error) }}>重新打开</button>}
-                </p>}
                 {valueInEditor && typeNote !== null && <p class="cell-editor-where-note" data-testid="cell-editor-type-note">{typeNote}</p>}
                 <div class="cell-editor-actions flex flex-wrap items-center">
                     <Commit disabled={!state.isTextareaDirty} query={query[0]} onClick={() => { state.commit(...query).catch(console.error) }} />
