@@ -1,7 +1,7 @@
 {
   "name": "vscode-sqlite3-editor",
   "displayName": "SQLite3 Editor",
-  "version": "3.0.22",
+  "version": "3.0.23",
   "description": "Edit SQLite3 files like you would in Excel.",
   "main": "extension.js",
   "publisher": "yy0931",

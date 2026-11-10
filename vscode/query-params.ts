@@ -12,7 +12,8 @@
  * float64, which SQLite reports as REAL (see insert-draft.ts for the same rule).
  */
 
-export type ZeroIndexedLocation = { line: number, column: number }
+// The Rust payload is unpacked with int64AsNumber: false, so positions arrive as BigInt.
+export type ZeroIndexedLocation = { line: number | bigint, column: number | bigint }
 export type ZeroIndexedRange = { start: ZeroIndexedLocation, end: ZeroIndexedLocation }
 
 /** Shape returned by the Rust `code_lens` command (see list_placeholders.rs). */

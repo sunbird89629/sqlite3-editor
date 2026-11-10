@@ -32,9 +32,14 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
         return new vscode.Position(line, column)
     }
     const range = (doc: vscode.TextDocument, value: Lens["range"]) => new vscode.Range(position(doc, value.start), position(doc, value.end))
-    // Placeholder ranges are relative to the statement text, which starts at `start`.
+    // Placeholder ranges are relative to the statement text, which starts at `start`;
+    // positions arrive as BigInt, so they are converted before arithmetic.
     const placeholderRange = (doc: vscode.TextDocument, start: Location, value: ZeroIndexedRange) => {
-        const at = (offset: ZeroIndexedLocation) => position(doc, { line: Number(start.line) + offset.line, column: (offset.line === 0 ? Number(start.column) : 0) + offset.column })
+        const at = (offset: ZeroIndexedLocation) => {
+            const line = Number(start.line) + Number(offset.line)
+            const column = (Number(offset.line) === 0 ? Number(start.column) : 0) + Number(offset.column)
+            return position(doc, { line, column })
+        }
         return new vscode.Range(at(value.start), at(value.end))
     }
     const lensTitle = (lens: Lens) => {
