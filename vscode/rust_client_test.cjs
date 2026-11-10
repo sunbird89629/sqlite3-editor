@@ -55,6 +55,13 @@ async function main() {
         assert.ok(completions.table_names.some((entry) => entry.table === 't'))
         assert.ok((await client.command('check_syntax', ["SELECT 'unterminated"])).length)
         assert.equal((await query('SELECT COUNT(*) AS n FROM t')).records[0].n, 1n)
+        // Parameter values from the SQL editor must keep their SQLite type: only BigInt stays INTEGER.
+        const typed = (await query('SELECT typeof(?1) AS t, ?1 AS v', [1n])).records[0]
+        assert.equal(typed.t, 'integer')
+        assert.equal(typed.v, 1n)
+        assert.equal((await query('SELECT typeof(?1) AS t', ['abc'])).records[0].t, 'text')
+        assert.equal((await query('SELECT typeof(?1) AS t', [2.5])).records[0].t, 'real')
+        await assert.rejects(query('SELECT ?1, ?2', [1n]), /number of parameters/i)
         console.log('Rust client query, types, search and read-only checks passed')
     } finally { client.close() }
 }

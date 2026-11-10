@@ -2,20 +2,25 @@ import vscode from "vscode"
 import { Packr, Unpackr } from "msgpackr"
 import type { LocalPythonClient } from "./extension"
 import { SQLITE_KEYWORDS } from "./sqlite-keywords"
+import { bindParams, findParamsBlock, mergePlaceholders, paramDiagnostics } from "./query-params"
+import type { Placeholder, ZeroIndexedLocation, ZeroIndexedRange } from "./query-params"
 
 const packr = new Packr({ useRecords: false, preserveNumericTypes: true })
 const unpackr = new Unpackr({ largeBigIntToFloat: false, int64AsNumber: false, mapsAsObjects: true, useRecords: true, preserveNumericTypes: true })
 type Location = { line: number | bigint, column: number | bigint }
-type Lens = { kind: "Select" | "Explain" | "Other", range: { start: Location, end: Location }, stmt_executed: string, placeholders: unknown[], cte_identifier: string | null }
+type Lens = { kind: "Select" | "Explain" | "Other", range: { start: Location, end: Location }, stmt_executed: string, placeholders: Placeholder[], cte_identifier: string | null }
 
 /** A query is associated only with a database the user has explicitly opened. */
 export function registerQueryEditor(context: vscode.ExtensionContext) {
     const connections = new Map<string, Set<LocalPythonClient>>()
     const panels = new Map<string, Set<vscode.WebviewPanel>>()
     const diagnostics = vscode.languages.createDiagnosticCollection("sqlite3-editor")
+    // Parameters use a separate collection: refreshDiagnostics() replaces the whole
+    // syntax entry for a document, so a shared collection would erase these.
+    const parameterDiagnostics = vscode.languages.createDiagnosticCollection("sqlite3-editor-parameters")
     const codeLensChanged = new vscode.EventEmitter<void>()
     const timers = new Map<string, ReturnType<typeof setTimeout>>()
-    context.subscriptions.push(diagnostics, codeLensChanged, { dispose: () => { for (const timer of timers.values()) { clearTimeout(timer) } } })
+    context.subscriptions.push(diagnostics, parameterDiagnostics, codeLensChanged, { dispose: () => { for (const timer of timers.values()) { clearTimeout(timer) } } })
     const database = (doc: vscode.TextDocument) => /^-- database: (.+)$/.exec(doc.lineAt(0).text)?.[1]
     const connection = (doc: vscode.TextDocument) => {
         const name = database(doc)
@@ -27,20 +32,31 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
         return new vscode.Position(line, column)
     }
     const range = (doc: vscode.TextDocument, value: Lens["range"]) => new vscode.Range(position(doc, value.start), position(doc, value.end))
-    const requestQuery = (conn: LocalPythonClient, sql: string, mode: "r" | "w+") => new Promise<any>((resolve, reject) => {
-        conn.request(packr.pack({ query: sql, params: [], mode }), (data) => {
+    // Placeholder ranges are relative to the statement text, which starts at `start`.
+    const placeholderRange = (doc: vscode.TextDocument, start: Location, value: ZeroIndexedRange) => {
+        const at = (offset: ZeroIndexedLocation) => position(doc, { line: Number(start.line) + offset.line, column: (offset.line === 0 ? Number(start.column) : 0) + offset.column })
+        return new vscode.Range(at(value.start), at(value.end))
+    }
+    const lensTitle = (lens: Lens) => {
+        const count = mergePlaceholders(lens.placeholders).length
+        const suffix = count === 0 ? "" : count === 1 ? " (1 param)" : ` (${count} params)`
+        return (lens.kind === "Other" ? "▶ Run write" : lens.cte_identifier ? `▶ Select ${lens.cte_identifier}` : "▶ Run query") + suffix
+    }
+    const requestQuery = (conn: LocalPythonClient, sql: string, mode: "r" | "w+", params: unknown[]) => new Promise<any>((resolve, reject) => {
+        conn.request(packr.pack({ query: sql, params, mode }), (data) => {
             try { resolve(unpackr.unpack(data)) } catch (err) { reject(err) }
         }, reject)
     })
-    const run = async (uri: vscode.Uri, version: number, sql: string, kind: Lens["kind"], placeholders: unknown[]) => {
+    const run = async (uri: vscode.Uri, version: number, sql: string, kind: Lens["kind"], placeholders: Placeholder[], startLine: number, isCte: boolean) => {
         const doc = await vscode.workspace.openTextDocument(uri)
         if (doc.version !== version) { vscode.window.showWarningMessage("Query changed; use the updated Run link."); return }
         const db = database(doc)
         const conn = connection(doc)
         if (!db || !conn) { vscode.window.showErrorMessage("Open the database in SQLite3 Editor before running this query."); return }
-        if (placeholders.length) { vscode.window.showErrorMessage("Queries with parameters are not yet supported in the SQL editor."); return }
+        const binding = bindParams(findParamsBlock(doc.getText().split(/\r?\n/), startLine, isCte), placeholders)
+        if ("error" in binding) { vscode.window.showErrorMessage(binding.error); return }
         try {
-            const result = await requestQuery(conn, sql, kind === "Other" ? "w+" : "r")
+            const result = await requestQuery(conn, sql, kind === "Other" ? "w+" : "r", binding.params)
             if (result?.columns && result?.records) {
                 const display = (value: unknown): string => value === null ? "NULL" : value instanceof Uint8Array ? `BLOB (${value.length} bytes)` : String(value ?? "")
                 const rows = result.records.slice(0, 500).map((record: Record<string, unknown>) => result.columns.map((column: string) => display(record[column])))
@@ -86,14 +102,22 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
             onDidChangeCodeLenses: codeLensChanged.event,
             async provideCodeLenses(doc, token) {
                 const conn = connection(doc)
+                parameterDiagnostics.delete(doc.uri)
                 if (!conn?.hasRust) { return [] }
                 const version = doc.version
                 try {
                     const lenses = await conn.command("code_lens", [doc.getText()]) as Lens[]
                     if (token.isCancellationRequested || doc.version !== version) { return [] }
+                    const lines = doc.getText().split(/\r?\n/)
+                    parameterDiagnostics.set(doc.uri, lenses.flatMap((lens) => {
+                        // A CTE lens runs a rewritten statement, so its ranges do not address the document.
+                        if (lens.cte_identifier !== null) { return [] }
+                        const block = findParamsBlock(lines, Number(lens.range.start.line), false)
+                        return paramDiagnostics(block, lens.placeholders).map((entry) => new vscode.Diagnostic(placeholderRange(doc, lens.range.start, entry.range), entry.message, entry.severity === "warning" ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information))
+                    }))
                     return lenses.map((lens) => new vscode.CodeLens(range(doc, lens.range), {
-                        title: lens.kind === "Other" ? "▶ Run write" : lens.cte_identifier ? `▶ Select ${lens.cte_identifier}` : "▶ Run query",
-                        command: "sqlite3-editor.runQuery", arguments: [doc.uri, version, lens.stmt_executed, lens.kind, lens.placeholders],
+                        title: lensTitle(lens),
+                        command: "sqlite3-editor.runQuery", arguments: [doc.uri, version, lens.stmt_executed, lens.kind, lens.placeholders, Number(lens.range.start.line), lens.cte_identifier !== null],
                     }))
                 } catch (err) { console.error("SQLite query CodeLens failed", err); return [] }
             },
@@ -122,7 +146,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
         }, "."),
         vscode.workspace.onDidChangeTextDocument(({ document }) => refreshDiagnostics(document)),
         vscode.workspace.onDidOpenTextDocument(refreshDiagnostics),
-        vscode.workspace.onDidCloseTextDocument((doc) => { diagnostics.delete(doc.uri); const key = doc.uri.toString(); const timer = timers.get(key); if (timer) { clearTimeout(timer); timers.delete(key) } }),
+        vscode.workspace.onDidCloseTextDocument((doc) => { diagnostics.delete(doc.uri); parameterDiagnostics.delete(doc.uri); const key = doc.uri.toString(); const timer = timers.get(key); if (timer) { clearTimeout(timer); timers.delete(key) } }),
     )
     return {
         addConnection(db: string, conn: LocalPythonClient) {
