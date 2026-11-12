@@ -8,6 +8,7 @@ import { escapeIdentifier, getTableList } from "./dialect"
 import { Table, useTableStore } from "./table"
 import { SchemaView } from "./schema_view"
 import { HistoryView } from "./history_view"
+import { ColumnPicker } from "./column_picker"
 import { useHistoryStore } from "./query-history"
 import { onKeydown } from "./keybindings"
 // @ts-ignore
@@ -181,52 +182,9 @@ const App = () => {
         void execute(entry.sql)
     }
 
-    // Column visibility picker, anchored under the column list in `SELECT ... FROM`.
     const visibleColumns = useTableStore((s) => s.visibleColumns)
     const setVisibleColumns = useTableStore((s) => s.setVisibleColumns)
     const columns = useTableStore((s) => s.columns)
-    const [columnPickerOpen, setColumnPickerOpen] = useState(false)
-    const [columnPickerError, setColumnPickerError] = useState(false)
-    const columnPickerRef = useRef<HTMLDivElement>(null)
-    const columnPickerTriggerRef = useRef<HTMLButtonElement>(null)
-
-    useEffect(() => {
-        setColumnPickerOpen(false)
-        setColumnPickerError(false)
-    }, [useCustomViewerQuery, tableName])
-    useEffect(() => {
-        if (!columnPickerOpen) { return }
-        columnPickerRef.current?.querySelector<HTMLInputElement>("input")?.focus()
-        const close = () => { setColumnPickerOpen(false); setColumnPickerError(false) }
-        const onPointerDown = (ev: PointerEvent) => {
-            const target = ev.target as Node
-            if (columnPickerRef.current?.contains(target) || columnPickerTriggerRef.current?.contains(target)) { return }
-            close()
-        }
-        const onKeyDown = (ev: KeyboardEvent) => {
-            if (ev.key !== "Escape") { return }
-            ev.preventDefault()
-            ev.stopPropagation()
-            close()
-            columnPickerTriggerRef.current?.focus()
-        }
-        document.addEventListener("pointerdown", onPointerDown)
-        document.addEventListener("keydown", onKeyDown, true)
-        return () => {
-            document.removeEventListener("pointerdown", onPointerDown)
-            document.removeEventListener("keydown", onKeyDown, true)
-        }
-    }, [columnPickerOpen])
-    const toggleColumn = async (name: string) => {
-        setColumnPickerError(false)
-        if (visibleColumns.includes(name)) {
-            if (visibleColumns.length === 1) { setColumnPickerError(true); return }
-            await setVisibleColumns(visibleColumns.filter((column) => column !== name))
-        } else {
-            await setVisibleColumns([...visibleColumns, name])
-        }
-    }
-    const visibleColumnsSQL = useTableStore((s) => s.getVisibleColumnsSQL())
     const historyCount = useHistoryStore((s) => s.entries.length)
     /** The three top-level tabs: History is a view of its own, Table and Custom query keep the old modes. */
     const topTab = viewerTab === "history" ? "history" : useCustomViewerQuery ? "query" : "table"
@@ -268,31 +226,9 @@ const App = () => {
             {viewerTab !== "history" && (!useCustomViewerQuery
                 ? <h2 class="pt-[var(--page-padding)]">
                     <div class="mb-2">
-                        <Highlight>SELECT </Highlight>
-                        <span class="column-picker">
-                            <button
-                                type="button"
-                                ref={columnPickerTriggerRef}
-                                aria-label="Select visible columns"
-                                aria-haspopup="dialog"
-                                aria-expanded={columnPickerOpen}
-                                data-testid="column-picker-trigger"
-                                class="column-picker-trigger"
-                                onClick={() => { setColumnPickerOpen(!columnPickerOpen); setColumnPickerError(false) }}>{visibleColumnsSQL}</button>
-                            {columnPickerOpen && <div ref={columnPickerRef} class="column-picker-popover" role="dialog" aria-label="Visible columns" data-testid="column-picker">
-                                <div class="column-picker-title">Visible columns</div>
-                                <div class="column-picker-list">
-                                    {columns.map(({ name }) => <label class="column-picker-item" data-testid={`column-picker-item ${name}`}>
-                                        <input
-                                            type="checkbox"
-                                            checked={visibleColumns.includes(name)}
-                                            onChange={() => { toggleColumn(name).catch(console.error) }} />
-                                        <span class="column-picker-name">{name}</span>
-                                    </label>)}
-                                </div>
-                                {columnPickerError && <p class="column-picker-error" role="status">Keep at least one column visible.</p>}
-                            </div>}
-                        </span>
+                        <ColumnPicker columns={columns} visible={visibleColumns} onChange={setVisibleColumns}>
+                            <Highlight>SELECT </Highlight>
+                        </ColumnPicker>
                         <Highlight> FROM </Highlight>
                         {tableName === undefined ? <>No tables</> : <TableSelector
                             value={tableName}

@@ -313,19 +313,50 @@ dialog {
 .native-query-body th, .native-query-body td { text-align: left; white-space: nowrap; }
 
 
-/* Column visibility picker, anchored under the column list in `SELECT ... FROM`. */
+/* Column visibility picker: searchable list with bulk actions, anchored under `SELECT ... FROM`. */
 .column-picker { position: relative; display: inline-block; }
 .column-picker-trigger { padding: 0 6px; cursor: pointer; background: transparent; color: inherit; border: 0; border-bottom: 1px dashed var(--td-border-color-active); font: inherit; }
 .column-picker-trigger:hover { background: var(--vscode-list-hoverBackground, #e9f2f5); }
 .column-picker-trigger:focus-visible { outline: 2px solid var(--vscode-focusBorder, #12638c); outline-offset: 1px; }
-.column-picker-popover { position: absolute; left: 0; top: calc(100% + 6px); z-index: 60; min-width: 210px; max-height: 320px; overflow: auto; padding: 8px; background: var(--vscode-editorWidget-background, #fff); color: var(--vscode-editorWidget-foreground, #222); border: 1px solid var(--vscode-editorWidget-border, #aaa); border-radius: 5px; box-shadow: 0 8px 24px #0002; font-family: var(--vscode-font-family, sans-serif); }
-.column-picker-title { padding: 2px 4px 6px; color: var(--vscode-descriptionForeground, #777); font-size: .85em; font-weight: 600; letter-spacing: .04em; }
-.column-picker-list { display: flex; flex-direction: column; }
-.column-picker-item { display: flex; align-items: center; gap: 7px; padding: 5px 4px; border-radius: 3px; cursor: pointer; }
-.column-picker-item:hover { background: var(--vscode-list-hoverBackground, #e9f2f5); }
-.column-picker-item input { accent-color: var(--vscode-focusBorder, #12638c); }
-.column-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.column-picker-error { margin-top: 6px; color: var(--vscode-errorForeground, #a53030); }
+.column-picker-popover {
+    position: absolute; left: 0; top: calc(100% + 6px); z-index: 60;
+    width: min(480px, calc(100vw - 40px));
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--vscode-editorWidget-background, #fff); color: var(--vscode-editorWidget-foreground, #222);
+    border: 1px solid var(--vscode-editorWidget-border, #aaa); border-radius: 6px;
+    box-shadow: 0 10px 28px #0002; font-family: var(--vscode-font-family, sans-serif);
+}
+.column-picker-head { padding: 8px 10px 6px; border-bottom: 1px solid var(--td-border-color); }
+.column-picker-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px; color: var(--vscode-descriptionForeground, #777); font-size: .88em; font-weight: 600; letter-spacing: .04em; }
+.column-picker-count { margin-left: auto; font-weight: 400; letter-spacing: 0; }
+.column-picker-search { position: relative; }
+.column-picker-search input {
+    width: 100%; padding: 5px 26px 5px 9px; border: 1px solid var(--td-border-color-active); border-radius: 4px;
+    background: var(--vscode-input-background, #fff); color: inherit; font: inherit; outline: none;
+}
+.column-picker-search input:focus { border-color: var(--vscode-focusBorder, #12638c); box-shadow: 0 0 0 2px rgba(18, 99, 140, .15); }
+.column-picker-search-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; border: 0; border-radius: 3px; background: transparent; color: var(--vscode-descriptionForeground, #777); cursor: pointer; }
+.column-picker-search-clear:hover { background: var(--vscode-list-hoverBackground, #eef1f3); color: inherit; }
+.column-picker-bulk { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--td-border-color); background: var(--vscode-editorWidget-background, #fafbfb); }
+.column-picker-link { border: 0; background: transparent; color: var(--vscode-textLink-foreground, #12638c); font: inherit; cursor: pointer; padding: 2px 4px; border-radius: 3px; }
+.column-picker-link:hover { background: var(--vscode-list-hoverBackground, #e9f2f5); }
+.column-picker-link:disabled { color: var(--vscode-descriptionForeground, #777); opacity: .55; cursor: default; background: transparent; }
+.column-picker-sep { color: var(--td-border-color-active); }
+.column-picker-hint { margin-left: auto; color: var(--vscode-descriptionForeground, #777); font-size: .88em; }
+.column-picker-list { max-height: 300px; overflow: auto; padding: 4px; }
+.column-picker-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 3px; cursor: pointer; }
+.column-picker-item:hover { background: var(--vscode-list-hoverBackground, #eef2f4); }
+.column-picker-item[data-cursor="true"] { background: var(--vscode-list-activeSelectionBackground, #e3eef4); box-shadow: inset 2px 0 0 var(--vscode-focusBorder, #12638c); }
+.column-picker-item input { flex: none; accent-color: var(--vscode-focusBorder, #12638c); }
+.column-picker-name { font-family: var(--vscode-editor-font-family, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column-picker-name mark { background: var(--vscode-editor-findMatchHighlightBackground, #ffe9a8); color: inherit; border-radius: 2px; }
+.column-picker-pk { flex: none; font-size: .78em; padding: 0 4px; border-radius: 3px; background: var(--td-border-color); color: var(--vscode-descriptionForeground, #48606e); }
+.column-picker-type { margin-left: auto; flex: none; color: var(--vscode-descriptionForeground, #777); font-size: .85em; font-family: var(--vscode-editor-font-family, monospace); }
+.column-picker-empty { padding: 22px 10px; text-align: center; color: var(--vscode-descriptionForeground, #777); }
+.column-picker-empty strong { display: block; margin-bottom: 6px; color: inherit; }
+.column-picker-error { padding: 6px 10px; color: var(--vscode-errorForeground, #a53030); background: var(--vscode-inputValidation-errorBackground, #fdf6e7); border-top: 1px solid var(--td-border-color); }
+.column-picker-foot { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--td-border-color); background: var(--vscode-editorWidget-background, #fafbfb); color: var(--vscode-descriptionForeground, #777); font-size: .85em; }
+.column-picker-foot kbd { font-family: var(--vscode-editor-font-family, monospace); font-size: .9em; padding: 0 4px; border: 1px solid var(--td-border-color-active); border-radius: 3px; background: var(--td-border-color); }
 
 /* Loading and stale-result feedback for the viewer. */
 .viewer-loading-chip, .viewer-stale-chip { padding: 1px 8px; border-radius: 9px; font-size: .85em; }
