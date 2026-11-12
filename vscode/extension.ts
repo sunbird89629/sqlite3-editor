@@ -86,14 +86,15 @@ export const activate = (context: vscode.ExtensionContext) => {
                 } case "/downloadState": {
                     res.send(packr.pack(Object.fromEntries(context.workspaceState.keys().map((stateKey) => [stateKey, context.workspaceState.get(stateKey)]))))
                     break
-                } case "/openRowInEditor": {
+                } case "/openRowInEditor": case "/openCellInEditor": {
+                    // A read-only snapshot: the value is shown in an editor tab and never written back.
                     const { content, column, table, row } = unpackr.unpack(body) as { content: unknown, column: unknown, table?: string, row?: string }
                     if (typeof content !== "string" || typeof column !== "string") { res.status(400).send("Invalid cell content"); break }
                     const errors: ParseError[] = []
                     parse(content, errors, { disallowComments: true, allowTrailingComma: false })
                     const isJSON = content.trim().length > 0 && errors.length === 0
                     const text = isJSON ? applyEdits(content, format(content, undefined, { insertSpaces: true, tabSize: 2 })) : content
-                    const name = [table, row, column, "saved snapshot"].filter(Boolean).join(" · ").replace(/[\\/\x00-\x1f:*?"<>|]/g, "_").slice(0, 160) || "row snapshot"
+                    const name = [table, row, column].filter(Boolean).join(" · ").replace(/[\\/\x00-\x1f:*?"<>|]/g, "_").slice(0, 160) || "value snapshot"
                     const uri = vscode.Uri.from({ scheme: "sqlite-editor-snapshot", path: `/${randomUUID()}/${name}.${isJSON ? "json" : "txt"}` })
                     snapshots.set(uri.toString(), text)
                     vscode.workspace.openTextDocument(uri).then((doc) => vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true })).then(

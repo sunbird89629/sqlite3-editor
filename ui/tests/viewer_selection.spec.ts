@@ -12,18 +12,34 @@ test('the first click selects a cell and nothing enters an edit state', async ({
     const cell = page.getByTestId('cell 0, 1')
     await cell.click()
     await expect(cell).toHaveAttribute('data-cell-selected', 'true')
-    // Selection never opens an editor.
-    await expect(page.getByTestId('inplaceInput')).toHaveCount(0)
+    // Selection never opens an in-place editor.
     await expect(page.locator('table textarea')).toHaveCount(0)
     // Escape clears the selection.
     await page.keyboard.press('Escape')
     await expect(page.locator('td[data-cell-selected="true"]')).toHaveCount(0)
-    // A double click and Enter keep the cell selected but do not edit it.
+})
+
+test('double click and Enter open the full value in a read-only snapshot', async ({ page }) => {
+    await seedSelection(page)
+    const cell = page.getByTestId('cell 0, 1')
+    await cell.click()
+
+    // In the development server the snapshot opens as a browser tab.
+    const byDoubleClick = page.waitForEvent('popup')
     await cell.dblclick()
-    await expect(cell).toHaveAttribute('data-cell-selected', 'true')
-    await expect(page.locator('table textarea')).toHaveCount(0)
+    const first = await byDoubleClick
+    await first.waitForLoadState()
+    expect(await first.evaluate(() => document.body.innerText)).toBe('n1')
+
+    const byEnter = page.waitForEvent('popup')
     await cell.press('Enter')
+    const second = await byEnter
+    await second.waitForLoadState()
+    expect(await second.evaluate(() => document.body.innerText)).toBe('n1')
+
+    // The value never becomes editable in the grid.
     await expect(page.locator('table textarea')).toHaveCount(0)
+    await expect(cell).toHaveAttribute('data-cell-selected', 'true')
 })
 
 test('arrow keys move the selection across cells and pages', async ({ page }) => {

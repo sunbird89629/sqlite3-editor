@@ -1,4 +1,4 @@
-import { PAGE_SIZE, useTableStore } from "./table"
+import { PAGE_SIZE, openValueSnapshot, useTableStore } from "./table"
 
 // https://gist.github.com/yy0931/14f854aae53dfd4c090fab389b448844
 type Code = "Abort" | "Again" | "AltLeft" | "AltRight" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "ArrowUp" | "AudioVolumeDown" | "AudioVolumeMute" | "AudioVolumeUp" | "Backquote" | "Backslash" | "Backspace" | "BracketLeft" | "BracketRight" | "BrightnessUp" | "BrowserBack" | "BrowserFavorites" | "BrowserForward" | "BrowserHome" | "BrowserRefresh" | "BrowserSearch" | "BrowserStop" | "CapsLock" | "Comma" | "ContextMenu" | "ControlLeft" | "ControlRight" | "Convert" | "Copy" | "Cut" | "Delete" | "Digit0" | "Digit1" | "Digit2" | "Digit3" | "Digit4" | "Digit5" | "Digit6" | "Digit7" | "Digit8" | "Digit9" | "Eject" | "End" | "Enter" | "Equal" | "Escape" | "F1" | "F10" | "F11" | "F12" | "F13" | "F14" | "F15" | "F16" | "F17" | "F18" | "F19" | "F2" | "F20" | "F21" | "F22" | "F23" | "F24" | "F3" | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "Find" | "Fn" | "Help" | "Home" | "Insert" | "IntlBackslash" | "IntlRo" | "IntlYen" | "KanaMode" | "KeyA" | "KeyB" | "KeyC" | "KeyD" | "KeyE" | "KeyF" | "KeyG" | "KeyH" | "KeyI" | "KeyJ" | "KeyK" | "KeyL" | "KeyM" | "KeyN" | "KeyO" | "KeyP" | "KeyQ" | "KeyR" | "KeyS" | "KeyT" | "KeyU" | "KeyV" | "KeyW" | "KeyX" | "KeyY" | "KeyZ" | "Lang1" | "Lang2" | "Lang3" | "Lang4" | "Lang5" | "LaunchApp1" | "LaunchApp2" | "LaunchMail" | "MediaPlayPause" | "MediaSelect" | "MediaStop" | "MediaTrackNext" | "MediaTrackPrevious" | "MetaLeft" | "MetaRight" | "Minus" | "NonConvert" | "NumLock" | "Numpad0" | "Numpad1" | "Numpad2" | "Numpad3" | "Numpad4" | "Numpad5" | "Numpad6" | "Numpad7" | "Numpad8" | "Numpad9" | "NumpadAdd" | "NumpadComma" | "NumpadDecimal" | "NumpadDivide" | "NumpadEnter" | "NumpadEqual" | "NumpadMultiply" | "NumpadParenLeft" | "NumpadParenRight" | "NumpadSubtract" | "OSLeft" | "OSRight" | "Open" | "PageDown" | "PageUp" | "Paste" | "Pause" | "Period" | "Power" | "PrintScreen" | "Props" | "Quote" | "ScrollLock" | "Select" | "Semicolon" | "ShiftLeft" | "ShiftRight" | "Slash" | "Sleep" | "Space" | "Tab" | "Undo" | "Unidentified" | "VolumeDown" | "VolumeMute" | "VolumeUp" | "WakeUp"
@@ -55,6 +55,16 @@ export const onKeydown = async (ev: KeyboardEvent) => {
         if (key("Escape")) {
             ev.preventDefault()
             useTableStore.setState({ selectedCell: null })
+            return
+        }
+        if (key("Enter") || key("F2")) {
+            // Enter and F2 open the full value in an editor tab; the viewer never edits in place.
+            const viewer = useTableStore.getState()
+            const value = viewer.records[selection.row]?.[selection.column]
+            if (value !== undefined || selection.column in (viewer.records[selection.row] ?? {})) {
+                ev.preventDefault()
+                openValueSnapshot(value ?? null, selection.column, selection.row)
+            }
             return
         }
         const delta = key("ArrowUp") ? [-1, 0] : key("ArrowDown") ? [1, 0] : key("ArrowLeft") ? [0, -1] : key("ArrowRight") ? [0, 1] : null

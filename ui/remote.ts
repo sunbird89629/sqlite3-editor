@@ -13,6 +13,8 @@ export const isVSCode = vscode !== undefined
 export const openNativeQuery = (tableName: string | undefined, prefill?: string) => post("/openNativeQuery", { tableName, prefill })
 /** Opens a read-only snapshot of one row in the VS Code editor. */
 export const openRowInEditor = (content: string, table: string | undefined, row: string) => post("/openRowInEditor", { content, column: "record", table, row })
+/** Opens a read-only snapshot of one cell value in the VS Code editor. */
+export const openCellInEditor = (content: string, column: string, table: string | undefined, row: string) => post("/openCellInEditor", { content, column, table, row })
 
 const queue: { start: number }[] = []
 

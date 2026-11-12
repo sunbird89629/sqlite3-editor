@@ -436,6 +436,27 @@ const PageInput = (props: { page: bigint, totalPages: bigint, disabled: boolean,
     />
 }
 
+/** Plain-text form of a cell value, used by the read-only snapshot and the clipboard. */
+export const cellText = (value: remote.MySqlValue): string =>
+    value instanceof Uint8Array ? `0x${blob2hex(value)}` : value === null ? "NULL" : String(value)
+
+/**
+ * Opens the full value in an editor tab (VS Code) or a new browser tab (development server).
+ * The snapshot is read-only: there is no way to write it back.
+ */
+export const openValueSnapshot = (value: remote.MySqlValue, column: string, rowIndex: number) => {
+    const state = useTableStore.getState()
+    const text = cellText(value)
+    if (remote.isVSCode) {
+        const row = `row ${state.paging.visibleAreaTop + BigInt(rowIndex) + 1n}`
+        void remote.openCellInEditor(text, column, state.tableName, row).catch(console.error)
+        return
+    }
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }))
+    window.open(url, "_blank", "noopener")
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
+
 const TableRow = (props: { selected: boolean, onPreview: () => void, readonly record: { readonly [key in string]: Readonly<remote.MySqlValue> }, rowNumber: bigint, row: number, columnWidths: readonly number[], rowKey: string | null }) => {
     const tableName = useTableStore((s) => s.tableName)
     const columns = useTableStore((s) => s.columns)
@@ -490,8 +511,11 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly re
                 aria-selected={isSelected}
                 data-cell-selected={isSelected ? "true" : undefined}
                 onMouseDown={select}
+                onDblClick={() => { openValueSnapshot(value, name, props.row) }}
                 onContextMenu={(ev) => {
                     renderContextmenu(ev, <>
+                        <button onClick={() => { openValueSnapshot(value, name, props.row) }}>Open Value in Editor</button>
+                        <hr />
                         <button onClick={() => {
                             if (value instanceof Uint8Array) {  // BLOB
                                 navigator.clipboard.writeText(blob2hex(value)).catch(console.error)
