@@ -1,5 +1,6 @@
 import vscode from "vscode"
 import type { MySqlClient } from "./mysql-client"
+import { registerSqlLens, sessionOf } from "./sql-lens"
 
 const RESULT_ROW_LIMIT = 500
 
@@ -8,7 +9,9 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
     const clients = new Map<string, MySqlClient>()
     const panels = new Map<string, Set<vscode.WebviewPanel>>()
 
-    const database = (doc: vscode.TextDocument) => /^-- database: (.+)$/.exec(doc.lineAt(0).text)?.[1]
+    const database = sessionOf
+    const lensChanged = new vscode.EventEmitter<void>()
+    context.subscriptions.push(lensChanged)
 
     const display = (value: unknown): string => value === null
         ? "NULL"
@@ -16,16 +19,10 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
             ? `BLOB (${value.length} bytes)`
             : String(value ?? "")
 
-    const run = async () => {
-        const doc = vscode.window.activeTextEditor?.document
-        if (!doc || doc.languageId !== "sql") { vscode.window.showWarningMessage("Open a SQL document to run a query."); return }
-        const db = database(doc)
-        const client = db ? clients.get(db) : undefined
-        if (!db || !client) { vscode.window.showErrorMessage("Open the MySQL connection in MySQL Viewer before running this query."); return }
-        const editor = vscode.window.activeTextEditor!
-        const selection = editor.selection.isEmpty ? doc.getText().split(/\r?\n/).slice(1).join("\n") : doc.getText(editor.selection)
-        const sql = selection.trim()
-        if (sql === "") { vscode.window.showWarningMessage("The document does not contain a statement."); return }
+    /** Runs one statement against an open session and pushes the rows to that session's viewer. */
+    const executeStatement = async (db: string, sql: string) => {
+        const client = clients.get(db)
+        if (!client) { vscode.window.showErrorMessage("Open the MySQL connection in MySQL Viewer before running this query."); return }
         try {
             const result = await client.query(sql, [])
             if (!result.columns || !result.records) { vscode.window.showInformationMessage("SQL statement executed."); return }
@@ -40,13 +37,33 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
         }
     }
 
-    context.subscriptions.push(vscode.commands.registerCommand("sqlite3-editor.runQuery", run))
+    /** Ctrl+Enter / the editor title button: run the selection, or the whole document. */
+    const run = async () => {
+        const editor = vscode.window.activeTextEditor
+        const doc = editor?.document
+        if (!editor || !doc || doc.languageId !== "sql") { vscode.window.showWarningMessage("Open a SQL document to run a query."); return }
+        const db = database(doc)
+        if (db === undefined) { vscode.window.showErrorMessage("This document has no `-- database:` header, so it is not linked to a session. Open the database with SQL Editor first."); return }
+        const selection = editor.selection.isEmpty ? doc.getText().split(/\r?\n/).slice(1).join("\n") : doc.getText(editor.selection)
+        const sql = selection.trim()
+        if (sql === "") { vscode.window.showWarningMessage("The document does not contain a statement."); return }
+        await executeStatement(db, sql)
+    }
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand("sqlite3-editor.runQuery", run),
+        vscode.commands.registerCommand("sqlite3-editor.runStatement", (db: unknown, sql: unknown) => {
+            if (typeof db !== "string" || typeof sql !== "string" || sql.trim() === "") { return }
+            return executeStatement(db, sql)
+        }),
+        registerSqlLens((session) => clients.has(session), lensChanged.event),
+    )
 
     return {
-        addConnection(db: string, client: MySqlClient) { clients.set(db, client) },
+        addConnection(db: string, client: MySqlClient) { clients.set(db, client); lensChanged.fire() },
         /** The session behind a `-- database:` header, used by the completion provider. */
         getClient(db: string): MySqlClient | undefined { return clients.get(db) },
-        removeConnection(db: string, client: MySqlClient) { if (clients.get(db) === client) { clients.delete(db) } },
+        removeConnection(db: string, client: MySqlClient) { if (clients.get(db) === client) { clients.delete(db); lensChanged.fire() } },
         addPanel(db: string, panel: vscode.WebviewPanel) {
             const set = panels.get(db) ?? new Set<vscode.WebviewPanel>()
             set.add(panel)

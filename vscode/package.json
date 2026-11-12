@@ -1,7 +1,7 @@
 {
   "name": "vscode-sqlite3-editor",
   "displayName": "MySQL Viewer",
-  "version": "4.0.9",
+  "version": "4.0.10",
   "description": "Browse MySQL databases read-only, like a spreadsheet.",
   "main": "extension.js",
   "publisher": "yy0931",
@@ -15,7 +15,7 @@
   "scripts": {
     "build": "pwsh ./build-dev.ps1 || ./build-dev.sh",
     "vscode:prepublish": "npm run build:prod",
-    "test": "mkdir -p .tmp && npx esbuild mysql-guard.ts --bundle --platform=node --format=cjs --outfile=.tmp/mysql-guard.cjs && npx esbuild mysql-client.ts --bundle --platform=node --format=cjs --external:mysql2 --outfile=.tmp/mysql-client.cjs && npx esbuild sql-completion-core.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-completion-core.cjs && node mysql-guard-test.cjs && node mysql-client-test.cjs && node sql-completion-test.cjs",
+    "test": "mkdir -p .tmp && npx esbuild mysql-guard.ts --bundle --platform=node --format=cjs --outfile=.tmp/mysql-guard.cjs && npx esbuild mysql-client.ts --bundle --platform=node --format=cjs --external:mysql2 --outfile=.tmp/mysql-client.cjs && npx esbuild sql-completion-core.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-completion-core.cjs && npx esbuild sql-statements.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-statements.cjs && node mysql-guard-test.cjs && node mysql-client-test.cjs && node sql-completion-test.cjs && node sql-statements-test.cjs",
     "build:prod": "pwsh ./build.ps1 || ./build.sh"
   },
   "engines": {
@@ -92,6 +92,15 @@
           }
         }
       }
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "sqlite3-editor.runQuery",
+          "when": "editorLangId == sql",
+          "group": "navigation"
+        }
+      ]
     }
   },
   "keywords": [

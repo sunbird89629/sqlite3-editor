@@ -109,6 +109,22 @@ MySQL 会话 SHALL 拒绝数据修改与结构修改语句（`INSERT`、`UPDATE`
 - **WHEN** 用户在 SQL 文档中执行 `UPDATE t SET a = 1`
 - **THEN** 显示只读限制错误，数据库不变
 
+### Requirement: SQL 文档中的执行入口
+
+会话关联的 SQL 文档 SHALL 为每条语句提供一个可见的 `Run` 操作，SHALL 在编辑器标题栏提供 `Run Query` 按钮，并 SHALL 支持 `Ctrl+Enter` 执行选区或整篇文档。当该文档的会话未打开时 SHALL NOT 显示 `Run` 操作，执行请求 SHALL 提示先打开连接。
+
+#### Scenario: 每条语句都有 Run
+- **WHEN** 文档中有两条以分号分隔的语句
+- **THEN** 每条语句上方各有一个 `Run` 操作，点击其中一条只执行该语句
+
+#### Scenario: 会话未打开
+- **WHEN** 用户打开一个带 `-- database:` 头的 SQL 文档，但该会话未连接
+- **THEN** 不显示 `Run` 操作；按 Ctrl+Enter 时提示先打开连接
+
+#### Scenario: Ctrl+Enter 执行选区
+- **WHEN** 用户选中一段语句并按 Ctrl+Enter
+- **THEN** 只执行选中的部分，结果照常显示
+
 ### Requirement: 关闭会话
 
 关闭面板时，扩展 SHALL 结束该会话的数据库连接，并 SHALL NOT 在后台保留连接。再次打开同一连接 SHALL 建立新的连接。
