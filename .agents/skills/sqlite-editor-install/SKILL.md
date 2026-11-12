@@ -66,7 +66,7 @@ node -p "const p=require('./package.json'), l=require('./package-lock.json'); [p
 
 ## 打包
 
-`vsce` 会执行 `vscode:prepublish` → `npm run build`（`build-dev.sh`/`build-dev.ps1`），即构建 `ui`、复制到 `vscode/webview/`、再用 esbuild 打包 `extension.ts`。**不要手工跳过这一步**，`extension.js` 内的 `msgpackr` 兼容补丁依赖该构建脚本。
+`vsce` 会执行 `vscode:prepublish` → `npm run build:prod`（`build.sh`/`build.ps1`），即构建 `ui`（压缩、无 sourcemap）、复制到 `vscode/webview/`、再用 `node build-extension.cjs --minify` 打包 `extension.ts`。**不要手工跳过这一步**，`extension.js` 内的 `msgpackr` 兼容补丁依赖该构建脚本。按 F5 调试用 `npm run build`（开发构建，保留 sourcemap）。
 
 `vsce` 要求扩展目录内有 `LICENSE`，仓库根目录有 GPLv3：
 
@@ -84,7 +84,7 @@ echo "VSIX=$vsix"
 - `--no-dependencies` 成立的前提是运行时依赖已被 esbuild 打进 `extension.js`（`mysql2`、`msgpackr`、`jsonc-parser`）。新增运行时依赖时先确认它确实被打包进去。
 - 输出到临时目录，避免同版本重复打包互相覆盖；用户指定位置时用用户的位置。
 - `vsce` 会改写包内 `package.json`（加入 `__metadata`、去掉 `scripts` 与 devDependencies），这是正常现象。
-- `vscode:prepublish` 走的是**开发构建**（`_build-dev`，带 sourcemap），所以 VSIX 里会有一个约 3MB 的 `webview/assets/*.js.map`。这是当前脚本的行为，不是打包错误；要减小体积得改 `vscode/package.json` 的 `build` 脚本，不在打包步骤里临时改。
+- **prepublish 必须走生产构建**：`vscode/package.json` 的 `vscode:prepublish` 指向 `build:prod`。4.0.2 之前它指向开发构建，VSIX 里因此多出约 3MB 的 `webview/assets/*.js.map`；4.0.3 起改为生产构建（9 文件、536KB）。F5 调试仍用 `npm run build`。
 
 ## 验证 VSIX 内容
 
@@ -93,15 +93,17 @@ unzip -l "$vsix"
 unzip -p "$vsix" extension/package.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);console.log(p.publisher+'.'+p.name,p.version,p.displayName);console.log('cmds:',(p.contributes.commands||[]).map(c=>c.command).join(','));console.log('settings:',Object.keys(p.contributes.configuration.properties).join(','))})"
 ```
 
-期望恰好这 10 项（数量可随 UI 产物变化，但种类固定）：
+期望恰好这 9 项（数量可随 UI 产物变化，但种类固定；生产构建不含 `.js.map`）：
 
 ```
 extension/extension.js
 extension/package.json
 extension/LICENSE.txt
 extension/webview/index.html
-extension/webview/assets/*.js  *.js.map  *.css  vendor.LICENSE.txt
+extension/webview/assets/*.js  *.css  vendor.LICENSE.txt
 ```
+
+参考体积：4.0.3 为 9 个文件、约 536KB。若出现 `*.js.map`，说明 prepublish 又退回了开发构建。
 
 出现以下任一项就说明 `.vscodeignore` 或清理漏了，停止并修正后重打：
 
