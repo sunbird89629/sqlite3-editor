@@ -172,26 +172,6 @@ table.viewer {
         background-color: rgba(66, 159, 202, 0.384);
         outline: 1px solid rgb(142, 197, 226);
     }
-
-    td.editing {
-        outline: 1px solid rgb(142, 197, 226);
-
-        pre {
-            @apply relative;
-
-            &.cursor-line {
-                animation: cursor-line 1s linear infinite;
-            }
-
-            textarea {
-                @apply absolute p-0 left-0 top-0 w-full h-full;
-
-                &.single-click {
-                    @apply opacity-0 bg-transparent;
-                }
-            }
-        }
-    }
 }
 
 @keyframes cursor-line {
@@ -272,12 +252,6 @@ dialog {
 .more-actions button { display: block; width: 100%; text-align: left; padding: 6px 8px; }
 .more-actions button::after { content: attr(aria-label); margin-left: 8px; }
 
-/* Selected-cell controls: keep the type and the actions readable in narrow editors. */
-.cell-editor-types { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
-.cell-editor-types > span:first-child { color: var(--vscode-descriptionForeground, #717b80); margin-right: 4px; }
-.cell-editor-actions { padding: 2px 8px 0; }
-.cell-editor-where-note { margin: 4px 8px 0; color: var(--vscode-descriptionForeground, #717b80); font-size: .92em; }
-#editor > div { padding-left: 8px; padding-right: 8px; }
 
 .table-selector { display: inline-block; vertical-align: middle; max-width: min(70vw, 320px); }
 .table-selector-trigger { display: flex; align-items: center; gap: 12px; justify-content: space-between; max-width: 100%; padding: 4px 10px; border-radius: 3px; background: var(--vscode-button-background, #075985); color: var(--vscode-button-foreground, white); }
@@ -309,7 +283,6 @@ dialog {
 .viewer-globals { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .query-area summary { list-style: none; }
 .query-area summary::-webkit-details-marker { display: none; }
-.more-actions-check { display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: pointer; }
 .more-actions hr { border: 0; border-top: 1px solid var(--td-border-color); margin: 4px 0; }
 
 /* Read-only query composer. */
@@ -329,19 +302,7 @@ dialog {
 .viewer td.selected { outline: 2px solid var(--vscode-focusBorder, #12638c); outline-offset: -2px; }
 .viewer td.selected:focus-visible { outline-offset: -2px; }
 
-/* Editor pane header with the collapse control and the save feedback. */
-#editor .editor-bar { display: flex; align-items: flex-start; gap: 6px; }
-.editor-toggle { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 6px 6px 0; font: inherit; }
-.editor-toggle:hover { background: var(--vscode-list-hoverBackground, #e9f2f5); }
-.editor-toggle:focus-visible { outline: 2px solid var(--vscode-focusBorder, #12638c); }
-.editor-status { margin-left: auto; margin-top: 12px; padding: 1px 8px; border-radius: 9px; background: var(--vscode-badge-background, #ddd); color: var(--vscode-badge-foreground, #333); font-size: .85em; }
-#editor.collapsed .editor-bar { padding-bottom: 2px; }
 
-/* Value type as a radio group. */
-.data-type-group { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
-.data-type-option { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; cursor: pointer; border-bottom: 1px solid transparent; }
-.data-type-option.checked { border-bottom-color: var(--td-border-color-active); }
-.data-type-option input { accent-color: var(--vscode-focusBorder, #12638c); }
 
 /* Result of a query run from the native SQL editor. */
 .native-query-result { margin-top: 10px; border: 1px solid var(--td-border-color); border-radius: 4px; background: var(--vscode-editorWidget-background, transparent); }
@@ -351,12 +312,6 @@ dialog {
 .native-query-body { max-height: 30vh; overflow: auto; }
 .native-query-body th, .native-query-body td { text-align: left; white-space: nowrap; }
 
-/* SQL completion popup for the read-only query composer. */
-.sql-completion { position: fixed; z-index: 80; min-width: 210px; max-height: 220px; overflow: auto; margin: 0; padding: 4px; list-style: none; background: var(--vscode-editorSuggestWidget-background, var(--vscode-editorWidget-background, #fff)); color: var(--vscode-editorSuggestWidget-foreground, inherit); border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-editorWidget-border, #aaa)); border-radius: 4px; box-shadow: 0 8px 24px #0002; font-family: var(--vscode-editor-font-family, monospace); }
-.sql-completion-item { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 3px; cursor: pointer; }
-.sql-completion-item.active { background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground, #cfe3ee)); color: var(--vscode-editorSuggestWidget-selectedForeground, inherit); }
-.sql-completion-kind { flex: none; width: 2.6em; text-align: center; font-size: .75em; text-transform: uppercase; opacity: .7; border: 1px solid currentColor; border-radius: 3px; }
-.sql-completion-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Column visibility picker, anchored under the column list in `SELECT ... FROM`. */
 .column-picker { position: relative; display: inline-block; }
@@ -386,8 +341,6 @@ dialog {
 .viewer-meta-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--vscode-descriptionForeground, #777); }
 .viewer-meta-sub { opacity: .85; }
 .viewer-readonly-badge { padding: 1px 7px; border-radius: 9px; background: var(--vscode-badge-background, #ddd); color: var(--vscode-badge-foreground, #333); font-size: .85em; }
-.viewer-external { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--td-border-color-active); border-radius: 10px; }
-.viewer-external button { border: 0; background: transparent; color: var(--vscode-textLink-foreground, #12638c); text-decoration: underline; cursor: pointer; font: inherit; }
 .viewer-meta-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .viewer-filter { width: 190px; padding: 3px 8px; border: 1px solid var(--td-border-color-active); border-radius: 3px; background: var(--vscode-input-background, #fff); color: inherit; }
 .viewer-filter:disabled { opacity: .5; }
@@ -395,7 +348,6 @@ dialog {
 .data-pagination-input { width: 46px; padding: 2px 4px; text-align: center; border: 1px solid var(--td-border-color-active); border-radius: 3px; background: var(--vscode-input-background, #fff); color: inherit; }
 .data-pagination-input:disabled { opacity: .5; }
 .viewer th.sorted { background: var(--vscode-list-activeSelectionBackground, #cfe3ee); }
-.query-operation { margin-top: 8px; }
 .data-area { padding: 16px; }
 .data-area .schema-tabs { padding: 0; }
 .data-area .viewer tbody td { height: 38px; }
@@ -424,7 +376,6 @@ dialog {
 .schema-index-name { font-weight: 600; overflow-wrap: anywhere; }
 .schema-definition { margin-top: 5px; color: var(--vscode-descriptionForeground, #777); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .schema-badge { margin-left: 8px; padding: 2px 5px; border-radius: 3px; background: var(--vscode-badge-background, #ddd); color: var(--vscode-badge-foreground, #333); font-size: .85em; }
-.schema-delete { color: var(--vscode-errorForeground, #b33d37); }
 .schema-empty, .schema-note { padding: 10px 12px; }
 .data-pagination {
     display: flex;
@@ -443,4 +394,3 @@ dialog {
     button:disabled { opacity: .45; cursor: default; }
     .data-pagination-range { opacity: .7; margin-left: 4px; }
 }
-.sql-completion-label b { font-weight: 600; }

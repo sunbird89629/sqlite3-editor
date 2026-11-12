@@ -1,6 +1,1 @@
-node_modules/
-_test.db
-dev.db
-dev.db-shm
-dev.db-wal
 server.js

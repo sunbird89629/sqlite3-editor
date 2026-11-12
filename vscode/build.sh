@@ -13,4 +13,3 @@ cp -r ../ui/dist ./webview
 
 # Build ./extension.ts
 node build-extension.cjs --minify
-node build-rust.cjs

@@ -5,6 +5,7 @@
 		"strict": true,
 		"esModuleInterop": true,
 		"moduleResolution": "Node",
-		"noUncheckedIndexedAccess": true
+		"noUncheckedIndexedAccess": true,
+		"skipLibCheck": true
 	}
 }

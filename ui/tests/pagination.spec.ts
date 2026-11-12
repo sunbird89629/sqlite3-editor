@@ -1,22 +1,15 @@
 import { test, expect } from '@playwright/test'
+import { gotoApp, numberedRows, seed } from './helpers'
 
-test('fixed pages, boundaries, data source changes and refresh', async ({ page }) => {
-    await page.goto('http://localhost:5173/')
+test('fixed pages, boundaries and data source changes', async ({ page }) => {
+    await gotoApp(page)
     const arithmetic = await page.evaluate(async () => {
         const { pageCount, pageOffset } = await (new Function('return import("/table.tsx")'))()
         return [0n, 10n, 11n, 23n, 90071992547409931n].map((n) => [String(pageCount(n)), String(pageOffset(n, n))])
     })
     expect(arithmetic).toEqual([['0', '0'], ['1', '0'], ['2', '10'], ['3', '20'], ['9007199254740994', '90071992547409930']])
-    await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        const table = (window as any).useTableStore
-        table.setState({ autoReload: false })
-        await remote.query('CREATE TABLE IF NOT EXISTS pagination_test (id INTEGER PRIMARY KEY, value TEXT)', [], 'w+')
-        await remote.query('DELETE FROM pagination_test', [], 'w+')
-        await remote.query("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<23) INSERT INTO pagination_test SELECT x, 'value ' || x FROM n", [], 'w+')
-        await table.getState().reloadAllTables('pagination_test')
-        await table.getState().setViewerQuery({ tableName: 'pagination_test' })
-    })
+
+    await seed(page, 'pagination_test', '`id` INT PRIMARY KEY, `value` TEXT', ['id', 'value'], numberedRows(23, (i) => `value ${i}`))
     const totalPages = page.getByTestId('page-indicator')
     const pageInput = page.getByTestId('page-input')
     const previous = page.getByRole('button', { name: 'Previous', exact: true })
@@ -24,18 +17,7 @@ test('fixed pages, boundaries, data source changes and refresh', async ({ page }
     await expect(pageInput).toHaveValue('1')
     await expect(totalPages).toHaveText('3')
     await expect(previous).toBeDisabled()
-    await page.setViewportSize({ width: 250, height: 700 })
-    const horizontal = await page.getByTestId('viewer-table').evaluate((table) => {
-        const container = table.parentElement!
-        container.scrollLeft = container.scrollWidth
-        return { overflow: container.scrollWidth > container.clientWidth, left: container.scrollLeft }
-    })
-    expect(horizontal.overflow).toBe(true)
-    expect(horizontal.left).toBeGreaterThan(0)
-    await page.setViewportSize({ width: 1280, height: 720 })
-    await page.getByTestId('viewer-table').hover()
-    await page.mouse.wheel(0, 500)
-    await expect(pageInput).toHaveValue('1')
+
     await next.click()
     await expect(pageInput).toHaveValue('2')
     await expect(page.getByTestId('row number 11')).toBeVisible()
@@ -43,86 +25,45 @@ test('fixed pages, boundaries, data source changes and refresh', async ({ page }
     await expect(pageInput).toHaveValue('3')
     await expect(next).toBeDisabled()
     await expect(page.getByTestId('row number 23')).toBeVisible()
-    await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        await remote.query('DELETE FROM pagination_test WHERE id > 10', [], 'w+')
-        ;(window as any).useTableStore.setState({ autoReload: true })
-        window.postMessage({ type: 'sqlite3-editor-server' }, '*')
-    })
+
+    // A page jump past the last page is clipped.
+    await pageInput.fill('99')
+    await pageInput.press('Enter')
+    await expect(pageInput).toHaveValue('3')
+
+    // Switching the data source returns to the first page.
+    await page.getByTestId('mode-query').click()
+    await page.getByTestId('custom-query-input').fill('SELECT * FROM pagination_test WHERE id <= 3')
+    await page.getByTestId('run-query').click()
     await expect(pageInput).toHaveValue('1')
     await expect(totalPages).toHaveText('1')
-    await page.evaluate(async () => {
-        const table = (window as any).useTableStore
-        await table.getState().setViewerQuery({ useCustomViewerQuery: true, customViewerQuery: 'SELECT * FROM pagination_test WHERE 0' })
-    })
-    await expect(pageInput).toHaveValue('0')
+
+    // A query without rows shows the empty state.
+    await page.getByTestId('custom-query-input').fill('SELECT * FROM pagination_test WHERE 1 = 0')
+    await page.getByTestId('run-query').click()
     await expect(totalPages).toHaveText('0')
     await expect(previous).toBeDisabled()
-    await expect(next).toBeDisabled()
 })
 
-test('page navigation protects drafts', async ({ page }) => {
-    await page.goto('http://localhost:5173/')
-    await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        const table = (window as any).useTableStore
-        table.setState({ autoReload: false })
-        await remote.query('CREATE TABLE IF NOT EXISTS pagination_drafts (id INTEGER PRIMARY KEY, value TEXT)', [], 'w+')
-        await remote.query('DELETE FROM pagination_drafts', [], 'w+')
-        await remote.query("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<12) INSERT INTO pagination_drafts SELECT x, 'v' || x FROM n", [], 'w+')
-        await table.getState().reloadAllTables('pagination_drafts')
-        await table.getState().setViewerQuery({ tableName: 'pagination_drafts' })
-    })
-    await page.getByTestId('cell 0, 1').click()
-    await page.getByTestId('cell 0, 1').click()
-    await page.getByTestId('inplaceInput').fill('draft')
+test('a table without a single-column primary key pages by offset', async ({ page }) => {
+    await gotoApp(page)
+    await seed(page, 'pagination_nopk', '`a` INT, `b` INT', ['a', 'b'], Array.from({ length: 14 }, (_, i) => [i + 1, i * 2]))
+    await expect(page.getByTestId('row-count')).toHaveText('14 rows')
+    await expect(page.getByTestId('page-indicator')).toHaveText('2')
     await page.getByRole('button', { name: 'Next', exact: true }).click()
-    await page.getByTestId('dialog > cancel').click()
+    await expect(page.getByTestId('row number 11')).toBeVisible()
+    await expect(page.getByTestId('cell 10, 0')).toHaveText('11')
+    // Offset paging still sorts correctly.
+    await page.locator('th[title="Sort by b"]').click()
+    await expect(page.locator('th[title="Sort by b"]')).toHaveAttribute('aria-sort', 'ascending')
     await expect(page.getByTestId('page-input')).toHaveValue('1')
-    await expect(page.getByTestId('inplaceInput')).toHaveValue('draft')
-    await page.getByRole('button', { name: 'Next', exact: true }).click()
-    await page.getByTestId('dialog > discard-changes').click()
-    await expect(page.getByTestId('page-input')).toHaveValue('2')
-    await page.getByTestId('cell 10, 1').click()
-    await page.getByTestId('cell 10, 1').click()
-    await page.getByTestId('inplaceInput').fill('committed')
-    await page.getByRole('button', { name: 'Previous', exact: true }).click()
-    await page.getByTestId('dialog > commit').click()
-    await expect(page.getByTestId('page-input')).toHaveValue('1')
-    await page.getByRole('button', { name: 'Next', exact: true }).click()
-    await expect(page.getByTestId('cell 10, 1')).toContainText('committed')
 })
 
-test('without-rowid tables, views and custom queries paginate and reset', async ({ page }) => {
-    await page.goto('http://localhost:5173/')
-    await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        const table = (window as any).useTableStore
-        table.setState({ autoReload: false })
-        await remote.query('CREATE TABLE IF NOT EXISTS pagination_wr (id INTEGER PRIMARY KEY, value TEXT) WITHOUT ROWID', [], 'w+')
-        await remote.query('DELETE FROM pagination_wr', [], 'w+')
-        await remote.query("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<23) INSERT INTO pagination_wr SELECT x, 'v' || x FROM n", [], 'w+')
-        await remote.query('CREATE VIEW IF NOT EXISTS pagination_view AS SELECT * FROM pagination_wr ORDER BY id', [], 'w+')
-        await table.getState().reloadAllTables('pagination_wr')
-        await table.getState().setViewerQuery({ tableName: 'pagination_wr' })
-    })
-    const totalPages = page.getByTestId('page-indicator')
-    const next = page.getByRole('button', { name: 'Next', exact: true })
-    await next.click()
-    await expect(page.getByTestId('cell 10, 1')).toContainText('v11')
-    await page.evaluate(async () => (window as any).useTableStore.getState().setViewerQuery({ tableName: 'pagination_view' }))
-    await expect(totalPages).toHaveText('3')
-    await next.click()
-    await expect(page.getByTestId('cell 10, 1')).toContainText('v11')
-    await page.evaluate(async () => (window as any).useTableStore.getState().setViewerQuery({ useCustomViewerQuery: true, customViewerQuery: 'SELECT * FROM pagination_wr ORDER BY id' }))
-    await expect(totalPages).toHaveText('3')
-    await next.click()
-    await expect(page.getByTestId('cell 10, 1')).toContainText('v11')
-    await page.evaluate(async () => {
-        const table = (window as any).useTableStore
-        await Promise.all([table.getState().setPaging({ visibleAreaTop: 20n }), table.getState().setPaging({ visibleAreaTop: 0n })])
-    })
+test('a composite primary key also falls back to offset paging', async ({ page }) => {
+    await gotoApp(page)
+    await seed(page, 'pagination_composite', '`a` INT, `b` INT, PRIMARY KEY (`a`, `b`)', ['a', 'b'], Array.from({ length: 12 }, (_, i) => [i + 1, i + 1]))
+    await expect(page.getByTestId('row-count')).toHaveText('12 rows')
     await expect(page.getByTestId('page-input')).toHaveValue('1')
-    await expect(totalPages).toHaveText('3')
-    await expect(page.getByTestId('cell 0, 1')).toContainText('v1')
+    await page.getByRole('button', { name: 'Next', exact: true }).click()
+    await expect(page.getByTestId('row number 11')).toBeVisible()
 })

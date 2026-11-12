@@ -13,5 +13,4 @@ Copy-Item "../ui/dist" "./webview" -Recurse
 # Build ./extension.ts
 node build-extension.cjs --minify
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node build-rust.cjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

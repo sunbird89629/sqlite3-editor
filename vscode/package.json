@@ -1,8 +1,8 @@
 {
   "name": "vscode-sqlite3-editor",
-  "displayName": "SQLite3 Editor",
-  "version": "3.0.23",
-  "description": "Edit SQLite3 files like you would in Excel.",
+  "displayName": "MySQL Viewer",
+  "version": "4.0.1",
+  "description": "Browse MySQL databases read-only, like a spreadsheet.",
   "main": "extension.js",
   "publisher": "yy0931",
   "repository": {
@@ -15,7 +15,7 @@
   "scripts": {
     "build": "pwsh ./build-dev.ps1 || ./build-dev.sh",
     "vscode:prepublish": "npm run build",
-    "test": "python3 -m pytest"
+    "test": "mkdir -p .tmp && npx esbuild mysql-guard.ts --bundle --platform=node --format=cjs --outfile=.tmp/mysql-guard.cjs && npx esbuild mysql-client.ts --bundle --platform=node --format=cjs --external:mysql2 --outfile=.tmp/mysql-client.cjs && node mysql-guard-test.cjs && node mysql-client-test.cjs"
   },
   "engines": {
     "vscode": "^1.71.0"
@@ -24,52 +24,78 @@
     "Other"
   ],
   "activationEvents": [
-    "onCustomEditor:sqlite3-editor.editor",
-    "onCustomEditor:sqlite3-editor.insert",
+    "onCommand:sqlite3-editor.connectMySql",
     "onLanguage:sql"
   ],
   "contributes": {
-    "configuration": {
-      "properties": {
-        "sqlite3-editor.pythonPath": {
-          "type": "string",
-          "default": ""
-        }
-      }
-    },
-    "customEditors": [
+    "commands": [
       {
-        "viewType": "sqlite3-editor.editor",
-        "displayName": "SQLite3 Editor",
-        "selector": [
-          {
-            "filenamePattern": "*.db"
-          },
-          {
-            "filenamePattern": "*.sqlite"
-          },
-          {
-            "filenamePattern": "*.sqlite3"
-          }
-        ],
-        "priority": "default"
+        "command": "sqlite3-editor.connectMySql",
+        "title": "Connect to MySQL",
+        "category": "MySQL Viewer"
       },
       {
-        "viewType": "sqlite3-editor.insert",
-        "displayName": "SQLite3 Insert Record",
-        "selector": [
-          {
-            "filenamePattern": "*.sqlite-insert-draft"
-          }
-        ],
-        "priority": "option"
+        "command": "sqlite3-editor.runQuery",
+        "title": "Run Query",
+        "category": "MySQL Viewer"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "sqlite3-editor.runQuery",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorLangId == sql"
+      }
+    ],
+    "configuration": {
+      "properties": {
+        "sqlite3-editor.mysqlConnections": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "MySQL connections shown by **SQLite3 Editor: Connect to MySQL**. The password is stored in plain text in your settings, so it can be copied by Settings Sync or committed to a repository. Do not use this field for credentials you cannot expose.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "host",
+              "database"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique identifier used to keep sessions apart."
+              },
+              "name": {
+                "type": "string",
+                "description": "Label shown in the connection picker."
+              },
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "number",
+                "default": 3306
+              },
+              "user": {
+                "type": "string"
+              },
+              "password": {
+                "type": "string",
+                "description": "Stored in plain text."
+              },
+              "database": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
   },
   "keywords": [
-    "sqlite",
-    "sqlite3",
-    "editor",
+    "mysql",
+    "database",
     "viewer",
     "table"
   ],
@@ -88,10 +114,8 @@
     "esbuild": "^0.15.7"
   },
   "dependencies": {
-    "@types/which": "^2.0.1",
     "jsonc-parser": "3.2.0",
     "msgpackr": "github:yy0931/msgpackr",
-    "tempy": "^3.0.0",
-    "which": "^3.0.0"
+    "mysql2": "^3.11.0"
   }
 }

@@ -1,70 +1,36 @@
 import { test, expect } from '@playwright/test'
+import { exec, gotoApp, seed } from './helpers'
 
-test('schema view preserves drafts, displays SQL and indexes, and stages index deletion', async ({ page }) => {
-    await page.goto('http://localhost:5173/')
+test('the schema view lists columns, the CREATE TABLE statement and the indexes', async ({ page }) => {
+    await gotoApp(page)
+    await seed(page, 'schema_test', '`id` VARCHAR(36) PRIMARY KEY, `value` VARCHAR(64) NOT NULL DEFAULT \'\'', ['id', 'value'], [['a', 'first']])
+    await exec(page, 'CREATE INDEX `schema_test_value` ON `schema_test` (`value`)')
     await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        await remote.query('DROP TABLE IF EXISTS schema_test', [], 'w+')
-        await remote.query('CREATE TABLE schema_test (id TEXT PRIMARY KEY, value TEXT)', [], 'w+')
-        await remote.query('CREATE INDEX schema_test_value ON schema_test(value)', [], 'w+')
         const table = (window as any).useTableStore
         await table.getState().reloadAllTables('schema_test')
         await table.getState().setViewerQuery({ tableName: 'schema_test' })
     })
-    await page.getByRole('button', { name: 'Data', exact: true }).click()
-    const insert = page.getByTestId('insert-column 1').getByTestId('editor-textarea')
-    await insert.fill('draft survives')
-    await page.getByRole('button', { name: 'Schema', exact: true }).click()
+
+    await page.getByTestId('schema-button').click()
     await expect(page.getByTestId('schema-view')).toBeVisible()
-    await expect(insert).toBeHidden()
-    await page.keyboard.press('Control+Enter')
-    await expect(page.getByTestId('schema-view')).toBeVisible()
-    await expect(page.getByTestId('schema-sql')).toContainText('CREATE TABLE schema_test')
-    await expect(page.getByText('schema_test_value', { exact: true })).toBeVisible()
-    await expect(page.getByText('Automatic', { exact: true })).toBeVisible()
+
+    // Columns come from information_schema, so types and keys match the server.
+    await expect(page.getByRole('cell', { name: 'id', exact: true })).toBeVisible()
+    await expect(page.getByRole('cell', { name: 'varchar(36)', exact: true })).toBeVisible()
+    await expect(page.getByRole('cell', { name: 'varchar(64)', exact: true })).toBeVisible()
+
+    // The original statement is shown, with indexes included.
+    await expect(page.getByTestId('schema-sql')).toContainText('CREATE TABLE `schema_test`')
+    await expect(page.getByTestId('schema-sql')).toContainText('schema_test_value')
+
+    // Wrapping can be turned off for long statements.
     await page.getByRole('button', { name: 'Wrap: On' }).click()
     await expect(page.getByTestId('schema-sql')).toHaveClass(/schema-sql-nowrap/)
-    await page.getByRole('button', { name: 'Back to data' }).click()
-    await expect(insert).toHaveValue('draft survives')
-    await page.getByRole('button', { name: 'Schema', exact: true }).click()
-    await page.getByRole('button', { name: 'Delete…' }).click()
-    await expect(page.getByText('Commit changes to the database?')).toBeVisible()
-    await page.getByTestId('dialog > discard-changes').click()
-    await expect(page.getByTestId('DROP INDEX')).toBeVisible()
-    await expect(page.getByTestId('schema-view')).toBeVisible()
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+    // The index list is read-only: no delete action exists.
     await expect(page.getByText('schema_test_value', { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Data', exact: true }).click()
-})
+    await expect(page.getByRole('button', { name: 'Delete…' })).toHaveCount(0)
 
-
-test('schema hides a cell editor while keeping its draft and ignores submit shortcut', async ({ page }) => {
-    await page.goto('http://localhost:5173/')
-    await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        await remote.query('DROP TABLE IF EXISTS schema_draft_test', [], 'w+')
-        await remote.query('CREATE TABLE schema_draft_test (value TEXT)', [], 'w+')
-        await remote.query('INSERT INTO schema_draft_test VALUES (?)', ['original'], 'w+')
-        const table = (window as any).useTableStore
-        await table.getState().reloadAllTables('schema_draft_test')
-        await table.getState().setViewerQuery({ tableName: 'schema_draft_test' })
-    })
-    await page.getByRole('button', { name: 'Data', exact: true }).click()
-    await page.getByTestId('cell 0, 0').click()
-    await page.getByTestId('cell 0, 0').click()
-    const input = page.getByTestId('editor-textarea')
-    await input.fill('pending draft')
-    await page.getByRole('button', { name: 'Schema', exact: true }).click()
-    await expect(input).toBeHidden()
-    await page.keyboard.press('Control+Enter')
-    const saved = await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        return (await remote.query('SELECT value FROM schema_draft_test', [], 'r')).records[0].value
-    })
-    expect(saved).toBe('original')
-    await page.getByRole('button', { name: 'Data', exact: true }).click()
-    await expect(input).toBeVisible()
-    await expect(input).toHaveValue('pending draft')
-    await expect(page.getByTestId('commit')).toBeEnabled()
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await page.getByRole('button', { name: 'Back to data' }).click()
+    await expect(page.getByTestId('viewer-table')).toBeVisible()
 })

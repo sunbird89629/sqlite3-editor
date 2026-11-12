@@ -1,64 +1,197 @@
 ---
 name: sqlite-editor-install
-description: 在此仓库构建 SQLite3 Editor 的 VSIX、安装到 VS Code 或检查本地安装；适用于打包、安装和排查构建依赖问题。
+description: 在此仓库构建 `yy0931.vscode-sqlite3-editor` 的 VSIX、安装到 VS Code 指定 profile，或检查本地安装；适用于打包、安装、回退和排查构建或安装问题。
 ---
 
-# 打包与安装 SQLite3 Editor
+# 打包与安装本仓库的扩展
+
+本仓库的扩展已经只做 MySQL 只读查看（产品名 MySQL Viewer），扩展标识仍是 `yy0931.vscode-sqlite3-editor`。
+技术栈只有 Node：`ui/`（Preact + Vite）、`node-http/`（开发期 HTTP 镜像）、`vscode/`（扩展宿主，`mysql2` 打进 `extension.js`）。
+没有 Rust 可执行文件，也没有 Python 回退，因此 **VSIX 与平台无关**，不再需要交叉编译或平台检查。
 
 ## 工作流
 
-从当前源码执行完整流程时，依次检查工作区和依赖、递增版本、提交、确认工作区干净、打包、安装和验证。打包不等于安装；按用户要求执行对应步骤。
+依次是：检查工作区 → 递增版本 → 打包 → 验证 VSIX 内容 → 安装到目标 profile → 验证安装 → （可选）运行验证。
+打包不等于安装；按用户要求执行对应步骤，并分开报告每一步的结果。
 
-在仓库根目录检查 `git status --short` 和 `vscode/package.json`，记录扩展 ID、版本和 `engines.vscode`。检查差异，区分本次相关改动与无关或归属不明的改动；保留并报告后者，不擅自暂存、提交、清理或丢弃。
+## 打包前检查
 
-## 提交与打包前检查
+1. 在仓库根目录记录扩展标识、版本和 `engines.vscode`：
 
-完整打包安装流程中，按下方规则递增并核对版本后，检查 Git 状态和差异，运行 `git diff --check`，只提交本次相关代码和版本变更；存在其他已暂存改动时使用限定路径的提交方式，确保它们不进入本次提交并保留其暂存状态。提交信息概括实际修改并包含版本号，不跳过 Git hooks。提交失败时停止，不打包。除非用户另外要求，不推送或创建 Git tag。
+   ```sh
+   cd vscode && node -p "const p=require('./package.json'); [p.publisher+'.'+p.name, p.version, p.engines.vscode].join(' | ')"
+   ```
 
-每次从源码打包前，运行 `git status --porcelain`：只有输出为空才能打包。该检查涵盖已跟踪文件、暂存区和未跟踪文件，不包含 Git 忽略的文件。存在任何输出时停止并报告；完整流程中须在提交后再次执行此检查。仅打包时不自动提交，若版本递增或其他改动使工作区不干净，停止并由用户处理后再继续；继续同一次打包时不再次递增版本。
+2. 依赖分两处：根目录的 npm workspace（`ui`、`node-http`），以及 `vscode/` 自己的 `package-lock.json`。缺依赖时按锁文件安装，不要为绕过安装失败而升级项目依赖：
 
-记录用于打包的提交 SHA。打包、安装或验证失败时，报告失败情况和已有提交 SHA，不自动撤销提交；同一次打包失败重试不重复递增版本或提交。仅安装已有 VSIX 或检查安装时，不要求工作区干净，也不自动提交。
+   ```sh
+   npm ci                 # 仓库根目录
+   cd vscode && npm ci
+   ```
+
+   锁文件与 `package.json` 不同步时 `npm ci` 会直接失败。此时用 `npm i`，并按用户要求决定是否提交锁文件变动，不要为了“让它过”而升级无关依赖。
+
+   新版 npm 默认阻止 install scripts，`esbuild` 二进制可能因此缺失，表现为构建时报 `You installed esbuild for another platform`。按提示放行后重建：
+
+   ```sh
+   npm install-scripts approve esbuild   # 或 npm rebuild esbuild
+   ```
+
+3. `git status --porcelain` 的规则：
+   - 用户要求**发布级打包**时，输出必须为空；有未提交改动就停止并报告，不要代为提交或清理。
+   - 用户只要求**本地打包测试**时，可以带未提交改动打包，但要记录：提交 SHA + “工作区有未提交改动”，并在报告里说明该 VSIX 不对应任何提交。
+
+4. 打包前清掉本地遗留产物；它们会被 `vsce` 打进 VSIX：
+
+   ```sh
+   cd vscode && rm -rf webview bin __pycache__ .pytest_cache
+   ```
+
+## 递增版本
+
+`vscode/` 是扩展包，根目录 `package.json` 不是；只改扩展版本：
+
+```sh
+cd vscode && npm version patch --no-git-tag-version
+```
+
+核对 `vscode/package.json` 与 `vscode/package-lock.json` 顶层和根包版本三者一致：
+
+```sh
+node -p "const p=require('./package.json'), l=require('./package-lock.json'); [p.version, l.version, l.packages[''].version].join(' ')"
+```
+
+- 每次从源码新打包递增一个补丁号；同一次打包失败重试或重复安装同一个 VSIX 不再递增。
+- 用户指定版本时以用户要求为准。不要创建 Git tag，默认不推送。
 
 ## 打包
 
-1. 确认根目录的 UI 依赖、`vscode/node_modules` 和 Rust/Cargo 已安装。`vscode` 不属于 npm workspace，有独立的 `package-lock.json`。优先按锁文件安装依赖；不要为解决依赖问题更新锁文件或升级项目依赖，除非任务明确要求。
-2. 每次从当前源码新打包时，在 `vscode/` 将扩展补丁版本递增一次（例如 `3.0.1` → `3.0.2`），并同步 `package.json` 与 `package-lock.json` 的项目版本。用户指定具体版本或明确要求保持版本时，以用户要求为准。同一次打包失败重试或重新安装同一个 VSIX 不重复递增；仅安装已有 VSIX 或检查安装时不修改源码版本。不要创建 Git tag。
+`vsce` 会执行 `vscode:prepublish` → `npm run build`（`build-dev.sh`/`build-dev.ps1`），即构建 `ui`、复制到 `vscode/webview/`、再用 esbuild 打包 `extension.ts`。**不要手工跳过这一步**，`extension.js` 内的 `msgpackr` 兼容补丁依赖该构建脚本。
 
-   ```sh
-   npm version patch --no-git-tag-version
-   ```
-
-   核对 `package.json`、`package-lock.json` 顶层和根包版本一致，按上面的规则完成提交和打包前干净检查，再从 `vscode/` 打包。VSIX 文件名必须包含新版本，例如 `sqlite3-editor-3.0.2.vsix`。
-
-   ```sh
-   sqlite_editor_version=$(node -p "require('./package.json').version")
-   sqlite_editor_dir=$(mktemp -d "${TMPDIR:-/tmp}/sqlite-editor.XXXXXXXX")
-   sqlite_editor_vsix="$sqlite_editor_dir/sqlite3-editor-$sqlite_editor_version.vsix"
-   npx vsce package --no-dependencies -o "$sqlite_editor_vsix"
-   ```
-
-   该命令自动运行 `vscode:prepublish`，构建 UI、扩展代码和当前构建机器平台的 Rust 后端。`--no-dependencies` 适用于当前扩展的 JS 依赖已被 esbuild 打进 `extension.js`；依赖结构变化时重新检查。Rust 可执行文件按操作系统及架构命名，只能直接验证当前构建平台；无匹配二进制时扩展回退到 Python。临时目录确保同版本重复打包不会覆盖已有文件；用户指定产物位置时使用指定位置。
-3. 检查退出状态和 VSIX 内容，例如 `unzip -l "$sqlite_editor_vsix"`。至少应包含 `extension/extension.js`、`extension/server.py`、`extension/umsgpack.py`、`extension/bin/` 下的当前平台 Rust 二进制及其许可证，以及 `extension/webview/index.html` 和资源。检查 VSIX 内 `extension/package.json` 的版本与文件名一致，记录 VSIX 路径和版本。
-
-## 安装与验证
-
-仅在用户要求安装时，使用用户指定的编辑器和目标配置档案。若用户希望在当前 VS Code 窗口使用，先查看窗口右上角的 Manage 配置档案按钮或 VS Code 配置档案界面，确认当前 profile；不要把无 `--profile` 参数的默认档案结果当作当前窗口的结果。若目标不明确，先确认用户使用的窗口和实例。安装本地 VSIX 可能替换目标档案中同 ID 的扩展，先检查目标档案的当前版本。
+`vsce` 要求扩展目录内有 `LICENSE`，仓库根目录有 GPLv3：
 
 ```sh
-code --profile 'VimMode' --list-extensions --show-versions | rg -i 'yy0931\.vscode-sqlite3-editor'
-code --profile 'VimMode' --install-extension "$sqlite_editor_vsix" --force
-code --profile 'VimMode' --list-extensions --show-versions | rg -i 'yy0931\.vscode-sqlite3-editor'
+cd vscode
+cp ../LICENSE ./LICENSE
+version=$(node -p "require('./package.json').version")
+outdir=$(mktemp -d "${TMPDIR:-/tmp}/mysql-editor.XXXXXXXX")
+vsix="$outdir/sqlite3-editor-$version.vsix"
+npx vsce package --no-dependencies -o "$vsix"
+rm -f LICENSE
+echo "VSIX=$vsix"
 ```
 
-上面的 `VimMode` 是曾经实测的档案名，执行时替换为目标窗口实际使用的 profile；默认档案可省略 `--profile`。`sqlite_editor_vsix` 是上一步生成的带版本号文件路径；新 shell 中应使用记录的实际路径。不要凭示例档案名创建或切换用户档案。相同版本重新安装时使用 `--force`。
+- `--no-dependencies` 成立的前提是运行时依赖已被 esbuild 打进 `extension.js`（`mysql2`、`msgpackr`、`jsonc-parser`）。新增运行时依赖时先确认它确实被打包进去。
+- 输出到临时目录，避免同版本重复打包互相覆盖；用户指定位置时用用户的位置。
+- `vsce` 会改写包内 `package.json`（加入 `__metadata`、去掉 `scripts` 与 devDependencies），这是正常现象。
+- `vscode:prepublish` 走的是**开发构建**（`_build-dev`，带 sourcemap），所以 VSIX 里会有一个约 3MB 的 `webview/assets/*.js.map`。这是当前脚本的行为，不是打包错误；要减小体积得改 `vscode/package.json` 的 `build` 脚本，不在打包步骤里临时改。
 
-列表中的版本只能证明该 ID 在目标档案中已安装，不能证明扩展已启用，也不能区分版本相同的不同构建。到目标窗口的扩展详情页核对版本、来源、安装路径、启用状态和自动更新状态。若用户要求使用扩展且它被禁用，启用该目标扩展；如果用户明确要求保持禁用则遵从。需要证明安装了本次构建时，检查详情页实际安装路径中的 `extension.js` 及前端 JS 资源，与 VSIX 里的对应文件比较哈希；配置了自定义扩展目录时，以实际目标为准。
+## 验证 VSIX 内容
 
-只有真正打开临时数据库并检查数据显示后，才能声称扩展宿主运行验证通过；使用新建的独立临时路径，避免修改用户数据库。Rust 二进制缺失时需要 Python 才能回退；部分终端工具也需要 Python，可用 `sqlite3-editor.pythonPath` 指定解释器。报告区分打包、目标档案安装、启用、文件匹配和运行验证各自结果。
+```sh
+unzip -l "$vsix"
+unzip -p "$vsix" extension/package.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);console.log(p.publisher+'.'+p.name,p.version,p.displayName);console.log('cmds:',(p.contributes.commands||[]).map(c=>c.command).join(','));console.log('settings:',Object.keys(p.contributes.configuration.properties).join(','))})"
+```
+
+期望恰好这 10 项（数量可随 UI 产物变化，但种类固定）：
+
+```
+extension/extension.js
+extension/package.json
+extension/LICENSE.txt
+extension/webview/index.html
+extension/webview/assets/*.js  *.js.map  *.css  vendor.LICENSE.txt
+```
+
+出现以下任一项就说明 `.vscodeignore` 或清理漏了，停止并修正后重打：
+
+- `extension/bin/`（旧 Rust 二进制残留）
+- `extension/__pycache__/`、`extension/.pytest_cache/`
+- `extension/*-test.cjs`、`extension/extension.ts`、`extension/mysql-client.ts`
+- 包内版本与文件名版本不一致
+
+## 安装到目标 profile
+
+先确认目标 profile。同一扩展 id 会装在多个 profile 里，每个 profile 的安装与启用状态独立：
+
+```sh
+code --list-extensions --show-versions | grep -i 'yy0931\.vscode-sqlite3-editor'
+code --profile 'VimMode' --list-extensions --show-versions | grep -i 'yy0931\.vscode-sqlite3-editor'
+```
+
+`~/.vscode/extensions/` 是共享目录，profile 只在 `~/Library/Application Support/Code/User/profiles/<location>/extensions.json` 里记录自己启用哪个版本。
+
+**同一 id 的本地 VSIX 会替换目标 profile 内的商店版**。当前扩展 id 就是旧的 SQLite3 Editor，替换后该 profile 不再能打开 `.db` 文件。安装前先读出目标 profile 的现有版本并在报告里写明影响，安装后用同样命令确认版本；未指定的 profile 不要动。
+
+```sh
+code --profile 'VimMode' --install-extension "$vsix" --force
+code --profile 'VimMode' --list-extensions --show-versions | grep -i 'yy0931\.vscode-sqlite3-editor'
+```
+
+安装后检查 profile 记录与文件一致性：
+
+```sh
+python3 - <<'PY'
+import json, pathlib
+profiles = pathlib.Path.home()/ "Library/Application Support/Code/User/profiles"
+for f in sorted(profiles.glob("*/extensions.json")):
+    for e in json.loads(f.read_text()):
+        if "yy0931.vscode-sqlite3-editor" in json.dumps(e):
+            loc = e["location"]
+            print(f.parent.name, e["version"], e["metadata"].get("source"), "pinned=%s" % e["metadata"].get("pinned"), loc.get("fsPath") or loc.get("path"))
+PY
+```
+
+第一列是 profile 的**位置名**（如 `-4ed0637a`），不是 `--profile` 接受的名字；名字与位置的对照在 `~/Library/Application Support/Code/User/globalStorage/storage.json` 的 `userDataProfiles`（`name` 与 `location`）。默认档案不在 `profiles/` 下，它的记录在 `~/.vscode/extensions/extensions.json`。
+
+`source` 应为 `vsix`；`pinned: true` 表示不会被商店版本自动覆盖。再解包 VSIX 与安装目录逐文件比对哈希：
+
+```sh
+tmpd=$(mktemp -d) && unzip -q "$vsix" -d "$tmpd"
+for f in extension.js package.json webview/index.html; do
+  cmp -s "$tmpd/extension/$f" "$HOME/.vscode/extensions/yy0931.vscode-sqlite3-editor-<version>/$f" && echo "match $f" || echo "DIFFER $f"
+done
+rm -rf "$tmpd"
+```
+
+`package.json` 会因 `__metadata` 不一致，属正常；用 `diff <(python3 -m json.tool ...)` 确认差异仅此一项。
+
+## 运行验证
+
+新装的扩展要**重开窗口**才加载。仅凭 `--list-extensions` 的版本号不能证明扩展已加载或能工作。
+
+准备一个连接（`sqlite3-editor.mysqlConnections`，密码明文存放，建议只读账号）：
+
+```json
+"sqlite3-editor.mysqlConnections": [
+  { "id": "local", "name": "本地", "host": "127.0.0.1", "port": 3306, "user": "viewer", "password": "secret", "database": "your_db" }
+]
+```
+
+执行命令 `SQLite3 Editor: Connect to MySQL`，然后至少确认：表清单出现、数据网格有记录、翻页与排序生效、`Schema` 页签有列与 `CREATE TABLE`、`Custom query` 里执行 `DELETE` 报只读错误。用独立测试库，不要指向用户正在使用的数据库。
+
+没有现成 MySQL 时，可用临时数据目录起一个，测完即删（不需要 `brew services`）：
+
+```sh
+BM=$(brew --prefix mysql)
+mysqld --initialize-insecure --datadir=/tmp/mv-data --basedir="$BM"
+mysqld --datadir=/tmp/mv-data --basedir="$BM" --port=3307 --socket=/tmp/mv.sock --mysqlx=OFF --log-error=/tmp/mv.err &
+mysql --socket=/tmp/mv.sock -uroot -e "CREATE DATABASE viewer_test; CREATE USER 'viewer'@'127.0.0.1' IDENTIFIED BY 'viewer'; GRANT ALL ON viewer_test.* TO 'viewer'@'127.0.0.1';"
+```
+
+## 回退
+
+```sh
+code --profile 'VimMode' --install-extension yy0931.vscode-sqlite3-editor --force
+```
+
+显式安装可回到商店版本（即使商店版本号更低）。回退后同样用 `--list-extensions --show-versions` 确认。
 
 ## 已知问题
 
-- 本机曾出现默认档案的 CLI 显示本地 `0.0.0`，但当前窗口的 `VimMode` 档案仍显示商店版 `1.0.214` 且全局禁用。对 `VimMode` 安装本地 VSIX 后仍需在目标档案启用；扩展详情显示 `0.0.0`、来源 `VSIX`、自动更新关闭后，才用临时数据库确认实际运行。页面保留商店文案或存在旧版本目录不能单独证明当前运行版本。
-- VS Code 拒绝安装为不兼容时，检查 `engines.vscode` 是否错误地写成精确版本。曾有 `1.71.0` 无法安装到 `1.144.1`，改成 `^1.71.0` 后成功；修改兼容范围前确认项目最低版本和目标版本，并重新打包。
-- 本机 Node 24 使用 npm 11 安装 `vscode` 子项目时，曾遇到旧锁文件与可选平台包不一致；脱离锁文件安装又可能解析到使用顶层 await 的 `temp-dir`，导致 CJS 打包失败。优先使用与旧锁文件兼容的 npm，并检查安装的实际依赖版本。曾在 macOS arm64 用 npm 8 按锁文件安装，再补齐与锁定 esbuild 版本匹配的 `esbuild-darwin-arm64` 可选二进制后成功打包；其他平台按实际架构处理，不直接套用该包。
-- `pwsh` 未安装时，项目构建脚本会回退到 `build-dev.sh`；应以最终退出状态及产物判断是否成功。
+- **旧产物混入 VSIX**：`vscode/.vscodeignore` 必须覆盖 `bin`、`**/__pycache__`、`**/.pytest_cache`、`*-test.cjs`、源码 `.ts`、`.tmp`、`_test_files`。曾因漏写而把旧 Rust 二进制（3.2MB）和 `__pycache__` 打进包。
+- **`msgpackr` 的 `utf8Write` 越界**：`github:yy0931/msgpackr` 会用 `0xffffffff` 调 `Buffer.utf8Write`，Node 20+ 直接抛 `ERR_BUFFER_OUT_OF_BOUNDS`。`vscode/build-extension.cjs` 与 `node-http/build.mjs` 都内置了 esbuild 补丁；若打包后运行时报这个错，说明构建脚本被绕过或补丁未匹配（脚本会主动报错）。
+- **`require("msgpackr")` 在 Node 侧不可用**：该 git 依赖未构建 `dist/node.cjs`，只有 ESM `import` 可用；写脚本探测协议时要走 ESM 或直接用打包产物。
+- **`engines.vscode` 必须是范围**（`^1.71.0`）。写成精确版本会让 VS Code 以“不兼容”拒绝安装。
+- **`node-http` 的 `/test/execute` 不是生产功能**：它只在 `MYSQL_ALLOW_WRITES=1` 时开放，供 Playwright 造数据；扩展本身从不调用它。验证扩展时不要指望它。
+- **商店版本可能覆盖本地安装**：未 `pinned` 时 VS Code 会按商店最新版重装；本地测试包应确认 `pinned: true`，否则版本号回退到商店版本。

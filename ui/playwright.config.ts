@@ -13,7 +13,8 @@ export default {
   workers: 1, // Tests share a single database and must not run concurrently.
   reporter: 'html',
   use: {
-    actionTimeout: 0,
+    // Every action has to fail with a stack trace instead of waiting forever.
+    actionTimeout: 15 * 1000,
     trace: 'on-first-retry',
   },
   projects: [

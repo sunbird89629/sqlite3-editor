@@ -6,3 +6,4 @@ extension.js
 __pycache__
 _test_files
 .pytest_cache
+.tmp/

@@ -1,15 +1,16 @@
 import { test, expect } from '@playwright/test'
+import { exec, gotoApp } from './helpers'
 
 test('searches tables, supports keyboard selection, and stays within a narrow viewport', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 500 })
-    await page.goto('http://localhost:5173/')
+    await gotoApp(page)
+    for (const name of ['selector_alpha', 'selector_beta', 'selector_gamma']) {
+        await exec(page, `CREATE TABLE IF NOT EXISTS \`${name}\` (value TEXT)`)
+    }
     await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        for (const name of ['selector_alpha', 'selector_beta', 'selector_gamma']) {
-            await remote.query(`CREATE TABLE IF NOT EXISTS ${name} (value TEXT)`, [], 'w+')
-        }
-        await (window as any).useTableStore.getState().reloadAllTables('selector_alpha')
-        await (window as any).useTableStore.getState().setViewerQuery({ tableName: 'selector_alpha' })
+        const table = (window as any).useTableStore
+        await table.getState().reloadAllTables('selector_alpha')
+        await table.getState().setViewerQuery({ tableName: 'selector_alpha' })
     })
     await page.getByTestId('table-name').click()
     const search = page.getByRole('combobox', { name: 'Search tables or views' })

@@ -1,22 +1,14 @@
 import { test, expect } from '@playwright/test'
+import { gotoApp, seed } from './helpers'
 
-const seed = async (page: import('@playwright/test').Page) => {
-    await page.goto('http://localhost:5173/')
-    await page.evaluate(async () => {
-        const remote = await (new Function('return import("/remote.ts")'))()
-        const table = (window as any).useTableStore
-        table.setState({ autoReload: false })
-        await remote.query('CREATE TABLE IF NOT EXISTS column_picker_test (id INTEGER PRIMARY KEY, name TEXT, payload TEXT)', [], 'w+')
-        await remote.query('DELETE FROM column_picker_test', [], 'w+')
-        await remote.query("INSERT INTO column_picker_test VALUES (1, 'first', '{}')", [], 'w+')
-        await table.getState().reloadAllTables('column_picker_test')
-        await table.getState().setViewerQuery({ tableName: 'column_picker_test' })
-    })
+const seedColumns = async (page: import('@playwright/test').Page) => {
+    await gotoApp(page)
+    await seed(page, 'column_picker_test', '`id` INT PRIMARY KEY, `name` TEXT, `payload` TEXT', ['id', 'name', 'payload'], [[1, 'first', '{}']])
     await expect(page.getByTestId('row-count')).toHaveText('1 row')
 }
 
 test('the column picker anchors under the column list and toggles columns', async ({ page }) => {
-    await seed(page)
+    await seedColumns(page)
     const trigger = page.getByTestId('column-picker-trigger')
     const popover = page.getByTestId('column-picker')
 
@@ -42,7 +34,6 @@ test('the column picker anchors under the column list and toggles columns', asyn
     await page.getByTestId('column-picker-item payload').locator('input').uncheck()
     await expect(page.locator('thead')).not.toContainText('payload')
     // ...but the last visible column cannot be hidden.
-    // A plain click (not `uncheck`, which asserts a state change) hits the guard.
     await page.getByTestId('column-picker-item id').locator('input').click()
     await expect(page.locator('.column-picker-error')).toContainText('at least one column')
     await expect(page.locator('thead')).toContainText('id')
@@ -61,16 +52,14 @@ test('the column picker anchors under the column list and toggles columns', asyn
 })
 
 test('the column picker closes on an outside click and after a table change', async ({ page }) => {
-    await seed(page)
+    await seedColumns(page)
     const trigger = page.getByTestId('column-picker-trigger')
     const popover = page.getByTestId('column-picker')
 
     await trigger.click()
     await expect(popover).toBeVisible()
-    // Clicking inside the popover keeps it open.
     await page.getByTestId('column-picker-item id').click()
     await expect(popover).toBeVisible()
-    // Clicking outside closes it.
     await page.getByTestId('row-count').click()
     await expect(popover).toHaveCount(0)
 

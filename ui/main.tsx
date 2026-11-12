@@ -1,21 +1,16 @@
-import { enableMapSet } from "immer"
-enableMapSet()
-
 import { render } from "preact"
-import { Editor, useEditorStore } from "./editor"
 import { useEffect, useRef, useState } from "preact/hooks"
 import { QueryEditor } from "./query_editor"
 import { TableSelector } from "./table_selector"
 import * as remote from "./remote"
-import { Button, flash, Highlight, persistentUseState, renderContextmenu, SVGOnlyCheckbox } from "./components"
-import { escapeSQLIdentifier, Table, useTableStore } from "./table"
-import { SettingsView } from "./schema_view"
-import { SqlCompletion } from "./sql_completion"
+import { Button, Highlight, renderContextmenu } from "./components"
+import { escapeIdentifier, getTableList } from "./dialect"
+import { Table, useTableStore } from "./table"
+import { SchemaView } from "./schema_view"
 import { onKeydown } from "./keybindings"
 // @ts-ignore
 import codiconTxt from "./codicon.txt?raw"
-import { useEventListener, useInterval } from "usehooks-ts"
-import type { JSXInternal } from "preact/src/jsx"
+import { useEventListener } from "usehooks-ts"
 
 export type VSCodeAPI = {
     postMessage(data: unknown): void
@@ -59,63 +54,24 @@ const LoadingIndicator = () => {
 const App = () => {
     const [showQueryEditor, setShowQueryEditor] = useState(false)
     const [queryResult, setQueryResult] = useState<{ columns: string[], rows: string[][], total: number } | null>(null)
-    const requireReloading = useTableStore((s) => s.requireReloading)
-    const isConfirmationDialogVisible = useTableStore((s) => s.isConfirmDialogVisible)
     const errorMessage = useTableStore((s) => s.errorMessage)
     const tableList = useTableStore((s) => s.tableList)
     const setViewerQuery = useTableStore((s) => s.setViewerQuery)
-    const autoReload = useTableStore((s) => s.autoReload)
     const useCustomViewerQuery = useTableStore((s) => s.useCustomViewerQuery)
     const customViewerQuery = useTableStore((s) => s.customViewerQuery)
     const tableName = useTableStore((s) => s.tableName)
-    const tableType = useTableStore((s) => s.tableList.find(({ name }) => name === tableName)?.type)
-    const visibleColumnsSQL = useTableStore((s) => s.getVisibleColumnsSQL())
-    const editorStatement = useEditorStore((s) => s.statement)
-    const [isSettingsViewOpen, setIsSettingsViewOpen] = persistentUseState("isSettingsViewOpen", false)
-    const confirmDialogRef = useRef<HTMLDialogElement>(null)
+    // The schema tab is a transient view: it always starts on the data tabs.
+    const [isSchemaViewOpen, setIsSchemaViewOpen] = useState(false)
     const tableRef = useRef<HTMLDivElement>(null)
     const moreActionsRef = useRef<HTMLDetailsElement>(null)
 
     useEffect(() => {
         const listener = (event: MessageEvent) => {
             if (event.data?.type === "sqlite3-editor-query-result") { setQueryResult(event.data) }
-            if (event.data?.type === "sqlite3-editor-inserted") { useTableStore.getState().reloadAllTables().catch(console.error) }
         }
         window.addEventListener("message", listener)
         return () => window.removeEventListener("message", listener)
     }, [])
-
-    // Show or close the confirmation dialog
-    useEffect(() => {
-        if (isConfirmationDialogVisible) {
-            confirmDialogRef.current?.showModal()
-            document.querySelector<HTMLButtonElement>(".confirm-dialog-commit")?.focus()
-        } else {
-            confirmDialogRef.current?.close()
-        }
-    }, [isConfirmationDialogVisible])
-    useEventListener("close", () => {
-        const { isConfirmDialogVisible } = useTableStore.getState()
-        if (isConfirmDialogVisible) {
-            isConfirmDialogVisible("cancel")
-        }
-    }, confirmDialogRef)
-
-    // Reload all tables if the database file is updated
-    useEventListener("message", ({ data }: remote.Message) => {
-        if (data.type === "sqlite3-editor-server" && data.requestId === undefined) {
-            if (useTableStore.getState().autoReload) {
-                requireReloading()
-            }
-        }
-    })
-    useInterval(() => {
-        if (!useTableStore.getState().reloadRequired) { return }
-        // Never replace the rows under an unsaved edit; the notice stays until it is safe.
-        if (useEditorStore.getState().isDirty()) { return }
-        useTableStore.getState().reloadAllTables()
-            .catch(console.error)
-    }, 1000)
 
     // Register keyboard shortcuts
     useEventListener("keydown", onKeydown)
@@ -125,16 +81,6 @@ const App = () => {
         if (menu?.open && event.target instanceof Node && !menu.contains(event.target)) {
             menu.open = false
         }
-    })
-
-    // Commit changes in the UPDATE editor when the margin on the right side of table is clicked.
-    useEventListener("click", async (ev) => {
-        if (useEditorStore.getState().statement !== "UPDATE") { return }
-        if (!tableRef.current || ev.target !== document.body) { return }
-        const tableRect = tableRef.current.getBoundingClientRect()
-        if (!(tableRect.top <= ev.clientY && ev.clientY < tableRect.bottom)) { return }
-        if (!await useEditorStore.getState().beforeUnmount()) { return }
-        await useEditorStore.getState().discardChanges()
     })
 
     // Call preventDefault() on unhandled contextmenu events while the context menu is open
@@ -147,7 +93,6 @@ const App = () => {
         }
     }, { current: document.body })
 
-
     // Viewer query draft, ordering, filtering and the read-only query mode.
     const sort = useTableStore((s) => s.sort)
     const setSort = useTableStore((s) => s.setSort)
@@ -155,7 +100,6 @@ const App = () => {
     const setFilter = useTableStore((s) => s.setFilter)
     const invalidQuery = useTableStore((s) => s.invalidQuery)
     const numRecords = useTableStore((s) => s.paging.numRecords)
-    const reloadRequired = useTableStore((s) => s.reloadRequired)
     const reloadAllTables = useTableStore((s) => s.reloadAllTables)
     const viewerLoading = useTableStore((s) => s.viewerLoading)
     const viewerStale = useTableStore((s) => s.viewerStale)
@@ -166,16 +110,15 @@ const App = () => {
     const [pendingLeaveQuery, setPendingLeaveQuery] = useState(false)
     const leaveQueryDialogRef = useRef<HTMLDialogElement>(null)
     const [queryTextarea, setQueryTextarea] = useState<HTMLTextAreaElement | null>(null)
-    const columnCache = useRef(new Map<string, string[]>())
     const filterTimer = useRef<number | undefined>(undefined)
 
     const queryDraftDirty = queryDraft.trim() !== customViewerQuery.trim() && queryDraft.trim() !== ""
     const queryIsEmpty = useCustomViewerQuery && customViewerQuery.trim() === ""
     const noTables = !useCustomViewerQuery && tableList.length === 0
     const examples = [
-        `SELECT * FROM ${escapeSQLIdentifier(tableName ?? "table-name")}`,
-        "SELECT name, type FROM sqlite_schema WHERE type IN ('table', 'view')",
-        "SELECT * FROM pragma_journal_mode",
+        `SELECT * FROM ${escapeIdentifier(tableName ?? "table-name")}`,
+        "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()",
+        "SHOW CREATE TABLE table-name",
     ]
 
     useEffect(() => { setQueryDraft(customViewerQuery) }, [customViewerQuery])
@@ -193,19 +136,6 @@ const App = () => {
     }, [pendingLeaveQuery])
     useEventListener("close", () => { setPendingLeaveQuery(false) }, leaveQueryDialogRef)
 
-    /** Columns of a table, cached for the completion popup. */
-    const fetchColumns = async (table: string) => {
-        const cached = columnCache.current.get(table)
-        if (cached) { return cached }
-        const state = useTableStore.getState()
-        // The viewer clears its table info in query mode, so only trust it for the table mode.
-        const local = !state.useCustomViewerQuery && state.tableName === table ? state.tableInfo.map(({ name }) => name) : undefined
-        if (local !== undefined && local.length > 0) { columnCache.current.set(table, local); return local }
-        const records = (await remote.query("SELECT name FROM pragma_table_info(?)", [table], "r", { withoutLogging: true })).records ?? []
-        const columns = records.map((record) => record.name + "")
-        columnCache.current.set(table, columns)
-        return columns
-    }
     const switchMode = (toQuery: boolean) => {
         if (toQuery === useCustomViewerQuery) { return }
         setQueryError("")
@@ -215,14 +145,12 @@ const App = () => {
     }
     const applyFilter = (value: string) => {
         window.clearTimeout(filterTimer.current)
-        setFilter(value).then((ok) => {
-            if (!ok) { setFilterDraft(useTableStore.getState().filter) }  // the draft was not applied
-        }).catch(console.error)
+        setFilter(value).catch(console.error)
     }
     const runQuery = async () => {
         const sql = queryDraft.trim().replace(/;\s*$/, "")
         if (sql === "") { setQueryError("Enter a SQL query first."); return }
-        if (!/^\s*(select|with)\b/i.test(sql)) { setQueryError("The viewer is read-only. Only SELECT and WITH statements run here."); return }
+        if (!/^\s*(select|with|show|desc|describe|explain|table)\b/i.test(sql)) { setQueryError("The viewer is read-only. Use the SQL Editor for other statements."); return }
         setQueryError("")
         await setViewerQuery({ customViewerQuery: sql }).catch(console.error)
     }
@@ -230,7 +158,7 @@ const App = () => {
     // Column visibility picker, anchored under the column list in `SELECT ... FROM`.
     const visibleColumns = useTableStore((s) => s.visibleColumns)
     const setVisibleColumns = useTableStore((s) => s.setVisibleColumns)
-    const tableInfo = useTableStore((s) => s.tableInfo)
+    const columns = useTableStore((s) => s.columns)
     const [columnPickerOpen, setColumnPickerOpen] = useState(false)
     const [columnPickerError, setColumnPickerError] = useState(false)
     const columnPickerRef = useRef<HTMLDivElement>(null)
@@ -272,6 +200,7 @@ const App = () => {
             await setVisibleColumns([...visibleColumns, name])
         }
     }
+    const visibleColumnsSQL = useTableStore((s) => s.getVisibleColumnsSQL())
 
     return <>
         {/* @vscode/codicons/dist/codicon.svg, https://github.com/microsoft/vscode-codicons, Attribution 4.0 International */}
@@ -287,6 +216,7 @@ const App = () => {
                 </div>
                 <div class="viewer-globals">
                     <Button onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
+                    <Button secondary onClick={() => { reloadAllTables().catch(console.error) }} data-testid="refresh">Refresh</Button>
 
                     <details ref={moreActionsRef} class="inline-block relative align-middle">
                         <summary class="cursor-pointer px-2 py-1 bg-gray-200 focus:outline focus:outline-2">More actions</summary>
@@ -295,52 +225,10 @@ const App = () => {
                                 if (moreActionsRef.current) { moreActionsRef.current.open = false }
                             }
                         }}>
-                            <label class="more-actions-check" title="Reload the view when the database is changed by another process.">
-                                <input type="checkbox" checked={autoReload} onChange={() => { useTableStore.setState({ autoReload: !autoReload }) }}></input> Auto reload
-                            </label>
-                            <hr />
-                            {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#trash" title="Drop Table" checked={editorStatement === "DROP TABLE"} onClick={(checked) => {
-                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                                useEditorStore.getState().dropTable(tableName)
-                            }} data-testid="drop-table-button"></SVGOnlyCheckbox>}
-                            {!useCustomViewerQuery && tableName && tableType === "view" && <SVGOnlyCheckbox icon="#trash" title="Drop View" checked={editorStatement === "DROP VIEW"} onClick={(checked) => {
-                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                                useEditorStore.getState().dropView(tableName)
-                            }} data-testid="drop-view-button"></SVGOnlyCheckbox>}
-                            {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#edit" title="Alter Table" checked={editorStatement === "ALTER TABLE"} onClick={(checked) => {
-                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                                useEditorStore.getState().alterTable(tableName, undefined).catch(console.error)
-                            }} data-testid="alter-table-button"></SVGOnlyCheckbox>}
-                            <SVGOnlyCheckbox icon="#empty-window" title="Create Table" checked={editorStatement === "CREATE TABLE"} onClick={(checked) => {
-                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                                useEditorStore.getState().createTable(tableName)
-                            }} data-testid="create-table-button"></SVGOnlyCheckbox>
-                            {!useCustomViewerQuery && tableName && tableType === "table" && <SVGOnlyCheckbox icon="#book" title="Create Index" checked={editorStatement === "CREATE INDEX"} onClick={(checked) => {
-                                if (!checked) { useEditorStore.getState().cancel().catch(console.error); return }
-                                useEditorStore.getState().createIndex(tableName)
-                            }} data-testid="create-index-button"></SVGOnlyCheckbox>}
-                            <hr />
-                            <button onClick={async () => {
-                                // Only fills the query editor; running stays an explicit action.
-                                await useTableStore.getState().seedQuery("SELECT * FROM pragma_journal_mode")  // PRAGMA functions require SQLite3 >=3.16.0 (2017-01-02)
-                            }}>Check Journal Mode</button>
-                            <button onClick={async () => {
-                                if (!await useEditorStore.getState().beforeUnmount()) { return }
-                                // The statement is committed from the editor pane, which the query mode hides.
-                                await useTableStore.getState().setViewerQuery({ useCustomViewerQuery: false })
-                                useEditorStore.getState().custom(undefined, "PRAGMA journal_mode=WAL")
-                                flash(document.querySelector("#editor")!)
-                            }}>Enable WAL Mode…</button>
-                            <hr />
-                            <button onClick={() => remote.openTerminal(`{{install sqlite-utils &&}}echo '[{"x": 1, "y": 2}, {"x": 3, "y": 4}]' | {{pythonPath}} -m sqlite_utils insert {{databasePath}} table-name -`)}>Import Table from JSON…</button>
-                            <button onClick={() => remote.openTerminal(`{{install sqlite-utils &&}}{{pythonPath}} -m sqlite_utils insert {{databasePath}} table-name input.csv --csv`)}>Import Table from CSV…</button>
-                            <button onClick={() => remote.openTerminal(`sqlite3 {{databasePath}} < input.sql`)}>Import Tables from SQL…</button>
-                            <hr />
-                            <button onClick={() => remote.openTerminal(`{{install sqlite-utils &&}}{{pythonPath}} -m sqlite_utils query {{databasePath}} ${escapeShell(`SELECT * FROM ${escapeSQLIdentifier(tableName || "table-name")}`)} > out.json`)}>Export Table to JSON…</button>
-                            <button onClick={() => remote.openTerminal(`{{install sqlite-utils &&}}{{pythonPath}} -m sqlite_utils query {{databasePath}} ${escapeShell(`SELECT * FROM ${escapeSQLIdentifier(tableName || "table-name")}`)} --csv > out.csv`)}>Export Table to CSV…</button>
-                            <button onClick={() => remote.openTerminal(`sqlite3 {{databasePath}} .dump > out.sql`)}>Export Tables to SQL…</button>
-                            <hr />
-                            <button onClick={() => remote.openTerminal(`{{install sqlite-utils &&}}{{pythonPath}} -m sqlite_utils duplicate {{databasePath}} ${escapeShell(tableName || "table-name")} ${escapeShell((tableName || "table-name") + "-copy")}`)}>Copy Table…</button>
+                            {!useCustomViewerQuery && tableName && <button onClick={() => { setIsSchemaViewOpen(true) }}>Show Table Schema and Indexes</button>}
+                            <button onClick={() => { reloadAllTables().catch(console.error) }}>Refresh</button>
+                            {!useCustomViewerQuery && tableName && <button onClick={() => { navigator.clipboard.writeText(tableName).catch(console.error) }}>Copy Table Name</button>}
+                            {tableName && <button onClick={async () => { await useTableStore.getState().seedQuery(`SELECT * FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${JSON.stringify(tableName)}`) }}>Describe Columns in Query Mode</button>}
                         </div>
                     </details>
                 </div>
@@ -363,7 +251,7 @@ const App = () => {
                             {columnPickerOpen && <div ref={columnPickerRef} class="column-picker-popover" role="dialog" aria-label="Visible columns" data-testid="column-picker">
                                 <div class="column-picker-title">Visible columns</div>
                                 <div class="column-picker-list">
-                                    {tableInfo.map(({ name }) => <label class="column-picker-item" data-testid={`column-picker-item ${name}`}>
+                                    {columns.map(({ name }) => <label class="column-picker-item" data-testid={`column-picker-item ${name}`}>
                                         <input
                                             type="checkbox"
                                             checked={visibleColumns.includes(name)}
@@ -381,25 +269,12 @@ const App = () => {
                             tables={tableList}
                             onContextMenu={(ev) => {
                                 renderContextmenu(ev, <>
-                                    <button onClick={async () => { setIsSettingsViewOpen(!isSettingsViewOpen) }}>Show Table Schema and Indexes</button>
-                                    {tableType === "table" && <button onClick={async () => { useEditorStore.getState().dropTable(tableName); flash(document.querySelector("#editor")!) }}>Drop Table</button>}
-                                    {tableType === "view" && <button onClick={async () => { useEditorStore.getState().dropView(tableName); flash(document.querySelector("#editor")!) }}>Drop View</button>}
-                                    {tableType === "table" && <button onClick={async () => { await useEditorStore.getState().alterTable(tableName, undefined); flash(document.querySelector("#editor")!) }}>Alter Table</button>}
-                                    <button onClick={async () => { useEditorStore.getState().createTable(tableName); flash(document.querySelector("#editor")!) }}>Create Table</button>
-                                    {tableType === "table" && <button onClick={async () => { useEditorStore.getState().createIndex(tableName); flash(document.querySelector("#editor")!) }}>Create Index</button>}
+                                    <button onClick={() => { setIsSchemaViewOpen(!isSchemaViewOpen) }}>Show Table Schema and Indexes</button>
                                     <hr />
-                                    <button onClick={async () => { await navigator.clipboard.writeText(tableName); flash(document.querySelector("#editor")!) }}>Copy Table Name</button>
+                                    <button onClick={() => { navigator.clipboard.writeText(tableName).catch(console.error) }}>Copy Table Name</button>
                                 </>)
                             }}
-                            />}
-                        {remote.isVSCode && tableName && <Button class="ml-2" data-testid="open-insert-editor" onClick={async () => {
-                            if (!await useEditorStore.getState().beforeUnmount()) { return }
-                            const fields = useTableStore.getState().tableInfo.map(({ name, type, notnull, dflt_value }) => ({
-                                name, value: "", blob: null,
-                                type: notnull && dflt_value === null ? (["real", "int", "integer"].includes(type.toLowerCase()) ? "number" : type.toLowerCase() === "blob" ? "blob" : "string") : "default",
-                            }))
-                            await remote.post("/openInsertEditor", { table: tableName, fields }).catch(console.error)
-                        }}>+ New record</Button>}
+                        />}
                     </div>
                 </h2>
                 : <section class="viewer-query" aria-label="Custom query">
@@ -421,11 +296,6 @@ const App = () => {
                         <span>Try</span>
                         {examples.map((sql) => <button type="button" class="viewer-query-example" key={sql} onClick={() => { setQueryDraft(sql); queryTextarea?.focus() }}>{sql}</button>)}
                     </div>}
-                    <SqlCompletion
-                        textarea={queryTextarea}
-                        tables={tableList.map(({ name }) => name)}
-                        columns={tableInfo.map(({ name }) => name)}
-                        fetchColumns={fetchColumns} />
                     <div class="viewer-query-actions">
                         <Button onClick={() => { runQuery().catch(console.error) }} data-testid="run-query">Run query<span class="opacity-60 ml-2 [font-size:70%]">Ctrl+Enter</span></Button>
                         {remote.isVSCode && <Button secondary={true} data-testid="open-in-sql-editor" onClick={() => { remote.openNativeQuery(tableName, queryDraft).catch(console.error) }}>Open in SQL Editor</Button>}
@@ -433,12 +303,10 @@ const App = () => {
                     </div>
                     {(queryError !== "" || invalidQuery !== null) && <p class="viewer-error" role="alert" data-testid="query-error">{queryError !== "" ? queryError : invalidQuery}</p>}
                 </section>}
-
-            <div class="query-operation" style={{ display: useCustomViewerQuery || (remote.isVSCode && editorStatement === "INSERT") || (isSettingsViewOpen && !useCustomViewerQuery && (editorStatement === "INSERT" || editorStatement === "UPDATE")) ? "none" : undefined }}><Editor /></div>
         </section>
 
         <section class="data-area" aria-label="Table data and schema">
-            <div class="viewer-meta" style={{ display: isSettingsViewOpen && !useCustomViewerQuery ? "none" : undefined }}>
+            <div class="viewer-meta" style={{ display: isSchemaViewOpen && !useCustomViewerQuery ? "none" : undefined }}>
                 <div class="viewer-meta-info">
                     {useCustomViewerQuery && <span class="viewer-readonly-badge">Read-only</span>}
                     {viewerLoading && <span class="viewer-loading-chip" role="status">Loading…</span>}
@@ -446,7 +314,7 @@ const App = () => {
                     <span data-testid="row-count">{numRecords.toString()} {numRecords === 1n ? "row" : "rows"}</span>
                     {sort !== null && <span class="viewer-meta-sub">· sorted by {sort.column} {sort.direction === "asc" ? "↑" : "↓"}</span>}
                     {filter.trim() !== "" && <span class="viewer-meta-sub">· filtered</span>}
-                    {reloadRequired && <span class="viewer-external">⚠ Changed outside the editor<button type="button" onClick={() => { reloadAllTables().catch(console.error) }} data-testid="reload-external">Reload</button></span>}
+                    <span class="viewer-meta-sub" data-testid="capability-notice" title="This session has no SQL analysis engine: completion, code lenses, diagnostics and parameter binding are unavailable.">· no completion or diagnostics</span>
                 </div>
                 <div class="viewer-meta-actions">
                     <input
@@ -490,19 +358,18 @@ const App = () => {
                 <div class="native-query-body"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
             </section>}
             {!useCustomViewerQuery && <nav class="schema-tabs" aria-label="Table view">
-                <button type="button" class={!isSettingsViewOpen ? "active" : ""} aria-current={!isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(false)}>Data</button>
-                <button type="button" class={isSettingsViewOpen ? "active" : ""} aria-current={isSettingsViewOpen ? "page" : undefined} onClick={() => setIsSettingsViewOpen(true)} data-testid="schema-button">Schema</button>
+                <button type="button" class={!isSchemaViewOpen ? "active" : ""} aria-current={!isSchemaViewOpen ? "page" : undefined} onClick={() => setIsSchemaViewOpen(false)}>Data</button>
+                <button type="button" class={isSchemaViewOpen ? "active" : ""} aria-current={isSchemaViewOpen ? "page" : undefined} onClick={() => setIsSchemaViewOpen(true)} data-testid="schema-button">Schema</button>
             </nav>}
             {/* Schema and Index */}
-            {isSettingsViewOpen && !useCustomViewerQuery && <SettingsView onBack={() => setIsSettingsViewOpen(false)} />}
+            {isSchemaViewOpen && !useCustomViewerQuery && <SchemaView onBack={() => setIsSchemaViewOpen(false)} />}
 
             {/* Table */}
-            {(!isSettingsViewOpen || useCustomViewerQuery) && <>
+            {(!isSchemaViewOpen || useCustomViewerQuery) && <>
                 {noTables
                     ? <div class="viewer-empty" data-testid="empty-tables">
                         <strong>This database has no tables</strong>
-                        <p>Create a table to start browsing records.</p>
-                        <Button onClick={() => { useEditorStore.getState().createTable(undefined) }}>Create table</Button>
+                        <p>The MySQL user for this connection may not see any table in its default database.</p>
                     </div>
                     : queryIsEmpty
                         ? <div class="viewer-empty" data-testid="empty-query">
@@ -536,16 +403,6 @@ const App = () => {
             </div>
         </dialog>
 
-        {/* Confirmation Dialog */}
-        <dialog class="py-4 px-8 bg-gray-100 shadow-lg mx-auto mt-[10vh]" ref={confirmDialogRef}>
-            <h2 class="pb-2 pl-0 text-center [font-size:120%]">Commit changes to the database?</h2>
-            <div class="float-right">
-                <Button onClick={() => { if (isConfirmationDialogVisible) { isConfirmationDialogVisible("commit") } }} class="confirm-dialog-commit mr-1" data-testid="dialog > commit">Commit</Button>
-                <Button onClick={() => { if (isConfirmationDialogVisible) { isConfirmationDialogVisible("discard changes") } }} secondary={true} class="mr-1" data-testid="dialog > discard-changes">Discard changes</Button>
-                <Button onClick={() => { if (isConfirmationDialogVisible) { isConfirmationDialogVisible("cancel") } }} secondary={true} data-testid="dialog > cancel">Cancel</Button>
-            </div>
-        </dialog>
-
         <dialog
             id="contextmenu"
             class="contextmenu"
@@ -553,24 +410,17 @@ const App = () => {
     </>
 }
 
-const escapeShell = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
-
 (async () => {
     await remote.downloadState()
-    const tableList = await remote.getTableList()
+    const tableList = await getTableList()
     const tableName = (() => {
         const restored = remote.getState<string>("tableName")
         return restored && tableList.some(({ name }) => name === restored) ?
             restored :
-            tableList[0]?.name
+            tableList[0]?.name as string | undefined
     })()
     useTableStore.setState({ tableList })
     await useTableStore.getState().setViewerQuery({ tableName })
-    await useEditorStore.getState().switchTable(tableName)
-    const s = useEditorStore.getState()
-    if (s.statement === "CREATE TABLE" && remote.isSQLiteOlderThan3_37) {
-        useEditorStore.setState({ strict: false })
-    }
     render(<App />, document.body)
 })().catch((err) => {
     console.error(err)

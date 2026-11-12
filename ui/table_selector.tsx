@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks"
 import type { JSXInternal } from "preact/src/jsx"
-import type { TableListItem } from "./remote"
+import type { TableListItem } from "./dialect"
 
 /** Searchable, viewport-aware selector for database tables and views. */
 export const TableSelector = (props: { value: string, tables: TableListItem[], onChange: (value: string) => void, onContextMenu: (event: JSXInternal.TargetedMouseEvent<HTMLButtonElement>) => void }) => {

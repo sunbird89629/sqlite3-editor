@@ -1,12 +1,10 @@
-import { useRef, useMemo, useCallback, useState, useEffect, useLayoutEffect } from "preact/hooks"
+import { useRef, useMemo, useState, useEffect } from "preact/hooks"
 import * as remote from "./remote"
-import { useEditorStore } from "./editor"
-import produce from "immer"
-import { flash, persistentRef, renderContextmenu } from "./components"
-import { BigintMath, createStore, querySelectorWithRetry } from "./util"
+import { persistentRef, renderContextmenu } from "./components"
+import { BigintMath, createStore } from "./util"
 import deepEqual from "fast-deep-equal"
-import type { JSXInternal } from "preact/src/jsx"
-import { fileTypeFromBuffer } from "file-type/core"
+import { escapeIdentifier, filterClause, getColumns, getIndexes, getTableList, getTableSchema, identList, orderClause, rowKeyColumn } from "./dialect"
+import type { ColumnInfo, IndexInfo, TableListItem } from "./dialect"
 
 export const PAGE_SIZE = 10n
 export const pageCount = (count: bigint) => (count + PAGE_SIZE - 1n) / PAGE_SIZE
@@ -16,10 +14,6 @@ export const pageOffset = (top: bigint, count: bigint) => {
 }
 
 export const useTableStore = createStore("useTableStore", {
-    /** True if a change to the database by another process is detected but the table is not reloaded yet. */
-    reloadRequired: false,
-    /** True while the "Commit changes?" dialog is visible. */
-    isConfirmDialogVisible: false as false | ((value: "commit" | "discard changes" | "cancel") => void),
     paging: {
         /** scrollTop */
         visibleAreaTop: 0n,
@@ -34,9 +28,7 @@ export const useTableStore = createStore("useTableStore", {
     useCustomViewerQuery: false,
     /** a custom query for the viewer */
     customViewerQuery: "",
-    /** The viewer reloads the table when the database is changed by another process when true. */
-    autoReload: true,
-    /** Orders the viewer rows by this column when set. `null` keeps the natural order (rowid or the order of the custom query). */
+    /** Orders the viewer rows by this column when set. `null` keeps the natural order (row key or the order of the custom query). */
     sort: null as { column: string, direction: "asc" | "desc" } | null,
     /** Case-insensitive text filter matched against every column of the viewer. Applied by the database, not in the browser. */
     filter: "",
@@ -46,161 +38,133 @@ export const useTableStore = createStore("useTableStore", {
     viewerStale: false,
     /** A statement that the query editor should show without running it (used by menu commands). */
     pendingQuery: null as string | null,
-    /** The cell selected in the viewer. The first click selects; editing starts on a second click or Enter. */
+    /** The cell selected in the viewer. Selection never enables editing. */
     selectedCell: null as { row: number, column: string } | null,
-    /** True while the editor pane body is hidden; the header stays visible. */
-    editorCollapsed: false,
-    /** Transient feedback shown in the editor header after a successful write. */
-    editorStatus: "",
     _rerender: {} as Record<string, never>,
     /** the list of tables in the database */
-    tableList: [] as remote.TableListItem[],
+    tableList: [] as TableListItem[],
     /** the name of the active table */
     tableName: undefined as string | undefined,
-    /** the columns to be queried, sorted by tableInfo. */
+    /** the columns to be queried, sorted by their position in the table. */
     visibleColumns: [] as string[],
     /** error messages of the viewer */
     invalidQuery: null as string | null,
     /** the list of columns in the table */
-    tableInfo: [] as remote.TableInfo,
-    foreignKeyList: [] as remote.ForeignKeyList,
-    indexList: [] as remote.IndexList,
-    indexInfo: [] as remote.IndexInfo[],
-    indexSchema: [] as (string | null)[],
+    columns: [] as ColumnInfo[],
+    indexList: [] as IndexInfo[],
     tableSchema: null as string | null,
-    rowIdColumn: null as string | null,
-    /** Represents whether the active table has an AUTOINCREMENT column. */
+    /** The single column that identifies a row; `null` when the table has no single-column primary key. */
+    rowKeyColumn: null as string | null,
+    /** Represents whether the active table has an AUTO_INCREMENT column. */
     autoIncrement: false,
     /** the records in the visible area */
-    records: [] as readonly { readonly [key in string]: Readonly<remote.SQLite3Value> }[],
-    /** the state of the textbox shown over a cell */
-    input: null as { readonly draftValue: JSXInternal.Element, readonly textarea: HTMLTextAreaElement | null } | null,
+    records: [] as readonly { readonly [key in string]: Readonly<remote.MySqlValue> }[],
 }, (set, get) => {
     let reloadGeneration = 0
     let schemaTable: string | undefined
-    let pageSnapshot: { table: string, top: bigint, records: readonly Record<string, remote.SQLite3Value>[] } | null = null
+    let pageSnapshot: { subquery: string, top: bigint, records: readonly Record<string, remote.MySqlValue>[] } | null = null
     /** Resets the viewer to the "nothing to show" state (no table selected, or no custom query typed yet). */
     const clearViewer = () => {
         const { paging } = get()
         pageSnapshot = null
-        set({ invalidQuery: null, viewerStale: false, selectedCell: null, records: [], tableInfo: [], visibleColumns: [], paging: { ...paging, numRecords: 0n, visibleAreaTop: 0n } })
+        set({ invalidQuery: null, viewerStale: false, selectedCell: null, records: [], columns: [], visibleColumns: [], paging: { ...paging, numRecords: 0n, visibleAreaTop: 0n } })
     }
-    /** Queries the visible area of the database table. */
+    /** Queries the visible area of the table or of the custom query. */
     const reloadTable = async (reloadSchema: boolean, reloadRecordCount: boolean) => {
         const generation = ++reloadGeneration
         set({ viewerLoading: true })
         try {
-            let state = get()
+            const state = get()
 
             /** The table name, or a subquery if using a custom query. */
             let subquery: string
-            /** True if `SELECT * FROM subquery` has row ids. */
-            let hasRowId: boolean
-            /** The list of columns of `SELECT * FROM subquery`. */
-            let tableInfo: remote.TableInfo
+            /** The list of columns of the current result. */
+            let columns: ColumnInfo[]
+            /** The single column that identifies a row of the current result. */
+            let rowKey: string | null
             if (!state.useCustomViewerQuery) {
                 if (state.tableName === undefined) { clearViewer(); return }
-                subquery = escapeSQLIdentifier(state.tableName)
-
-                const tableListItem = state.tableList.find(({ name }) => name === state.tableName!)
-                if (tableListItem === undefined) { clearViewer(); return }
-                hasRowId = tableListItem.type === "table" && !tableListItem.wr
-                tableInfo = !reloadSchema ? get().tableInfo : await remote.getTableInfo(state.tableName, { withoutLogging: true })
+                subquery = escapeIdentifier(state.tableName)
+                columns = !reloadSchema ? state.columns : await getColumns(state.tableName, { withoutLogging: true })
+                rowKey = !reloadSchema ? state.rowKeyColumn : rowKeyColumn(columns)
+                if (columns.length === 0) { clearViewer(); return }
             } else {
                 if (state.customViewerQuery.trim() === "") { clearViewer(); return }
-                subquery = `(${state.customViewerQuery})`
-                hasRowId = false
-                tableInfo = !reloadSchema ? get().tableInfo : (await remote.query(`SELECT * FROM ${subquery} LIMIT 0`, [], "r", { withoutLogging: true })).columns.map((column, i): remote.TableInfo[number] => ({ name: column, cid: BigInt(i), dflt_value: null, notnull: 0n, pk: 0n, type: "" }))
+                // MySQL requires an alias on every derived table.
+                subquery = `(${state.customViewerQuery}) AS viewer_query`
+                rowKey = null
+                columns = !reloadSchema ? state.columns : (await remote.query(`SELECT * FROM ${subquery} LIMIT 0`, [], { withoutLogging: true }))?.columns.map((name): ColumnInfo => ({ name, type: "", nullable: true, default: null, primaryKey: false, autoIncrement: false })) ?? []
             }
 
-            // SQLite's hidden rowid aliases can be shadowed by declared columns.
-            // table_info omits generated columns, so inspect the actual result columns too.
-            const columnNames = hasRowId && reloadSchema ? (await remote.query(`SELECT * FROM ${subquery} LIMIT 0`, [], "r", { withoutLogging: true })).columns : []
-            const rowIdColumn = hasRowId ? (reloadSchema ? ["rowid", "_rowid_", "oid"].find((name) => !columnNames.some((column) => column.toLowerCase() === name)) ?? null : get().rowIdColumn) : null
-            const retainedColumns = reloadSchema && !state.useCustomViewerQuery && state.tableName === schemaTable ? state.visibleColumns.filter((name) => tableInfo.some((column) => column.name === name)) : []
-            const selectedColumns = retainedColumns.length ? retainedColumns : tableInfo.map(({ name }) => name)
+            const retainedColumns = reloadSchema && !state.useCustomViewerQuery && state.tableName === schemaTable ? state.visibleColumns.filter((name) => columns.some((column) => column.name === name)) : []
+            const selectedColumns = retainedColumns.length ? retainedColumns : columns.map(({ name }) => name)
 
             // Filtering happens in the database so that it applies to the whole result, not just the visible page.
-            const filterTerm = state.filter.trim()
-            const escapeLike = (term: string) => term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")
-            const filterTargets = tableInfo.map(({ name }) => name)
-            const filterParams: remote.SQLite3Value[] = filterTerm === "" || filterTargets.length === 0 ? [] : filterTargets.map(() => `%${escapeLike(filterTerm)}%`)
-            const filterSQL = filterTerm === "" || filterTargets.length === 0 ? "" : `(${filterTargets.map((name) => `CAST(${escapeSQLIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\\'`).join(" OR ")})`
+            const activeColumns = (!state.useCustomViewerQuery ? columns : state.columns).filter((column) => selectedColumns.includes(column.name))
+            const filter = filterClause(activeColumns.length ? activeColumns : columns, state.filter)
             // Sorting also happens in the database so that page 2 continues where page 1 ended.
-            const sort = state.sort !== null && tableInfo.some(({ name }) => name === state.sort!.column) ? state.sort : null
-            const orderSQL = sort !== null
-                ? ` ORDER BY ${escapeSQLIdentifier(sort.column)} ${sort.direction === "desc" ? "DESC" : "ASC"}${rowIdColumn !== null && sort.column !== rowIdColumn ? `, ${escapeSQLIdentifier(rowIdColumn)}` : ""}`
-                : rowIdColumn !== null ? ` ORDER BY ${escapeSQLIdentifier(rowIdColumn)}` : ""
+            const sort = state.sort !== null && columns.some((column) => column.name === state.sort!.column) ? state.sort : null
+            const order = orderClause(sort, columns, rowKey)
 
             if (reloadSchema || reloadRecordCount) { pageSnapshot = null }
             if (generation !== reloadGeneration) { return }
             if (reloadRecordCount) {
-                const numRecords = (await remote.query(`SELECT COUNT(*) as count FROM ${subquery}${filterSQL === "" ? "" : ` WHERE ${filterSQL}`}`, filterParams, "r", { withoutLogging: true })).records[0]!.count
+                const where = filter.sql === "" ? "" : ` WHERE ${filter.sql}`
+                const counted = (await remote.query(`SELECT COUNT(*) AS count FROM ${subquery}${where}`, filter.params, { withoutLogging: true }))?.records[0]?.count
                 if (generation !== reloadGeneration) { return }
-                if (typeof numRecords !== "bigint") { throw new Error(numRecords + "") }
-                await setPaging({ numRecords }, undefined, true)
-                state = get() // state.paging will be updated
+                const numRecords = typeof counted === "bigint" ? counted : BigInt(Number(counted ?? 0))
+                await setPaging({ numRecords }, true)
             }
 
-            // Query the database
-            // The anchor optimization is only valid while rows are ordered by rowid.
-            const delta = pageSnapshot ? state.paging.visibleAreaTop - pageSnapshot.top : 0n
-            const anchor = sort === null && rowIdColumn !== null && pageSnapshot && pageSnapshot.table === subquery && delta > 0n && delta <= BigInt(pageSnapshot.records.length) ? pageSnapshot.records[Number(delta - 1n)]?.[rowIdColumn] : undefined
-            const useAnchor = typeof anchor === "bigint" || typeof anchor === "number"
+            const current = get()
+            // The anchor optimization only holds while the rows are ordered by the row key.
+            const delta = pageSnapshot ? current.paging.visibleAreaTop - pageSnapshot.top : 0n
+            const anchor = sort === null && rowKey !== null && pageSnapshot && pageSnapshot.subquery === subquery && delta > 0n && delta <= BigInt(pageSnapshot.records.length)
+                ? pageSnapshot.records[Number(delta - 1n)]?.[rowKey]
+                : undefined
+            const useAnchor = anchor !== undefined && anchor !== null
             const conditions: string[] = []
-            const params: remote.SQLite3Value[] = []
-            if (filterSQL !== "") { conditions.push(filterSQL); params.push(...filterParams) }
-            if (useAnchor) { conditions.push(`${escapeSQLIdentifier(rowIdColumn!)} > ?`); params.push(anchor!) }
+            const params: remote.MySqlValue[] = []
+            if (filter.sql !== "") { conditions.push(filter.sql); params.push(...filter.params) }
+            if (useAnchor) { conditions.push(`${escapeIdentifier(rowKey!)} > ?`); params.push(anchor as remote.MySqlValue) }
             const where = conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`
-            const selectedSQL = reloadSchema ? (selectedColumns.length === tableInfo.length ? "*" : selectedColumns.map(escapeSQLIdentifier).join(", ")) : getVisibleColumnsSQL()
-            const records = (await remote.query(`SELECT${rowIdColumn ? ` ${escapeSQLIdentifier(rowIdColumn)} AS ${escapeSQLIdentifier(rowIdColumn)},` : ""} ${selectedSQL} FROM ${subquery}${where}${orderSQL} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`, [...params, state.paging.visibleAreaSize, ...(useAnchor ? [] : [state.paging.visibleAreaTop])], "r", { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" })).records!
+            const selectedSQL = reloadSchema ? (selectedColumns.length === columns.length ? "*" : identList(selectedColumns)) : getVisibleColumnsSQL()
+            const selected = `SELECT ${rowKey !== null && !selectedColumns.includes(rowKey) ? `${escapeIdentifier(rowKey)}, ` : ""}${selectedSQL} FROM ${subquery}${where}${order} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`
+            const records = (await remote.query(selected, [...params, current.paging.visibleAreaSize, ...(useAnchor ? [] : [current.paging.visibleAreaTop])], { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" }))?.records ?? []
             if (generation !== reloadGeneration) { return }
-            pageSnapshot = { table: subquery, top: state.paging.visibleAreaTop, records }
+            pageSnapshot = { subquery, top: current.paging.visibleAreaTop, records }
 
-            // Update the store
             if (!reloadSchema) {
-                set({ records, rowIdColumn, invalidQuery: null, viewerStale: false, selectedCell: null })
+                set({ records, rowKeyColumn: rowKey, columns, invalidQuery: null, viewerStale: false, selectedCell: null })
+            } else if (!state.useCustomViewerQuery) {
+                const indexList = await getIndexes(state.tableName!, { withoutLogging: true })
+                const tableSchema = await getTableSchema(state.tableName!, { withoutLogging: true })
+                if (generation !== reloadGeneration) { return }
+                schemaTable = state.tableName
+                set({
+                    invalidQuery: null,
+                    viewerStale: false,
+                    columns,
+                    visibleColumns: selectedColumns,
+                    records,
+                    rowKeyColumn: rowKey,
+                    autoIncrement: columns.some((column) => column.autoIncrement),
+                    tableSchema,
+                    indexList,
+                })
             } else {
-                if (!state.useCustomViewerQuery) {
-                    const indexList = await remote.getIndexList(state.tableName!, { withoutLogging: true })
-                    const autoIncrement = await remote.hasTableAutoincrementColumn(state.tableName!, { withoutLogging: true })
-                    const tableSchema = await remote.getTableSchema(state.tableName!, { withoutLogging: true })
-                    const foreignKeyList = await remote.getForeignKeyList(state.tableName!, { withoutLogging: true })
-                    const indexInfo = await Promise.all(indexList.map((index) => remote.getIndexInfo(index.name, { withoutLogging: true })))
-                    const indexSchema = await Promise.all(indexList.map((index) => remote.getIndexSchema(index.name, { withoutLogging: true }).then((x) => x ?? null)))
-                    if (generation !== reloadGeneration) { return }
-                    schemaTable = state.tableName
-                    set({
-                        invalidQuery: null,
-                        viewerStale: false,
-                        tableInfo,
-                        foreignKeyList,
-                        visibleColumns: selectedColumns,
-                        records,
-                        rowIdColumn,
-                        autoIncrement,
-                        tableSchema,
-                        indexList,
-                        indexInfo,
-                        indexSchema,
-                    })
-                } else {
-                    schemaTable = undefined
-                    set({
-                        invalidQuery: null,
-                        viewerStale: false,
-                        tableInfo,
-                        foreignKeyList: [],
-                        visibleColumns: tableInfo.map(({ name }) => name),
-                        records,
-                        rowIdColumn,
-                        autoIncrement: false,
-                        tableSchema: null,
-                        indexList: [],
-                        indexInfo: [],
-                        indexSchema: [],
-                    })
-                }
+                schemaTable = undefined
+                set({
+                    invalidQuery: null,
+                    viewerStale: false,
+                    columns,
+                    visibleColumns: columns.map(({ name }) => name),
+                    records,
+                    rowKeyColumn: rowKey,
+                    autoIncrement: false,
+                    tableSchema: null,
+                    indexList: [],
+                })
             }
         } catch (err) {
             if (generation !== reloadGeneration) { return }
@@ -224,44 +188,18 @@ export const useTableStore = createStore("useTableStore", {
         const changed = (opts.tableName !== undefined && opts.tableName !== previous.tableName)
             || (opts.useCustomViewerQuery !== undefined && opts.useCustomViewerQuery !== previous.useCustomViewerQuery)
             || (opts.customViewerQuery !== undefined && opts.customViewerQuery !== previous.customViewerQuery)
-        if (changed && (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount())) { return }
         // Sorting refers to columns of the previous result, so it is dropped when the data source changes.
         set(changed ? { ...opts, sort: null, paging: { ...previous.paging, visibleAreaTop: 0n } } : opts)
         await remote.setState("tableName", get().tableName)
         await reloadTable(true, true)
-        if (opts.useCustomViewerQuery !== undefined || opts.customViewerQuery !== undefined || opts.tableName !== undefined) {
-            await useEditorStore.getState().switchTable(opts.useCustomViewerQuery ? undefined : get().tableName)
-        }
     }
-    const listUniqueConstraints = () => {
-        const uniqueConstraints: { primary: boolean, columns: string[] }[] = []
-        const { tableInfo, indexList, indexInfo } = get()
-        const primaryColumns = tableInfo.filter((column) => column.pk).sort((a, b) => Number(a.pk - b.pk)).map((column) => column.name)
-        if (primaryColumns.length) { uniqueConstraints.push({ primary: true, columns: primaryColumns }) }
-        for (const [i, index] of indexList.entries()) {
-            if (index.partial) { continue }
-            if (!index.unique) { continue }
-            const columns = indexInfo[i]!.map(({ name }) => name)
-            if (columns.length && columns.every((name) => typeof name === "string")) {
-                uniqueConstraints.push({ primary: index.origin === "pk", columns })
-            }
-        }
-        return uniqueConstraints
-    }
-    const setPaging = async (opts: { visibleAreaTop?: bigint, numRecords?: bigint, visibleAreaSize?: bigint }, preserveEditorState?: true, withoutTableReloading?: true) => {
+    const setPaging = async (opts: { visibleAreaTop?: bigint, numRecords?: bigint, visibleAreaSize?: bigint }, withoutTableReloading?: true) => {
         let paging = { ...get().paging, ...opts }
         paging.visibleAreaSize = PAGE_SIZE
         paging.visibleAreaTop = pageOffset(paging.visibleAreaTop, paging.numRecords)
         if (deepEqual(get().paging, paging)) { return }
-        if (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount()) { return }
-
-        if (!preserveEditorState) { await useEditorStore.getState().discardChanges() }
-        paging = { ...get().paging, ...opts, visibleAreaSize: PAGE_SIZE }
-        paging.visibleAreaTop = pageOffset(paging.visibleAreaTop, paging.numRecords)
-
         // Update paging before querying the database. Otherwise the scrollbar will vibrate.
         set({ paging })
-
         if (!withoutTableReloading) {
             await reloadTable(false, false)
         }
@@ -272,78 +210,50 @@ export const useTableStore = createStore("useTableStore", {
         await setViewerQuery({ useCustomViewerQuery: true })
     }
     /** Orders the viewer rows by the given column in the database, or restores the natural order when null. */
-    const setSort = async (sort: { column: string, direction: "asc" | "desc" } | null): Promise<boolean> => {
-        if (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount()) { return false }
+    const setSort = async (sort: { column: string, direction: "asc" | "desc" } | null) => {
         set({ sort, paging: { ...get().paging, visibleAreaTop: 0n } })
         await reloadTable(false, false)
-        return true
     }
     /** Filters the viewer rows in the database so that the filter applies to the whole result, not to one page. */
-    const setFilter = async (filter: string): Promise<boolean> => {
-        if (filter === get().filter) { return true }
-        if (!await remote.guardInsertEditor() || !await useEditorStore.getState().beforeUnmount()) { return false }
+    const setFilter = async (filter: string) => {
+        if (filter === get().filter) { return }
         set({ filter, paging: { ...get().paging, visibleAreaTop: 0n } })
         await reloadTable(false, true)
-        return true
     }
     /** Render visibleColumns to be embedded in SQL queries. */
     const getVisibleColumnsSQL = () => {
-        const { tableInfo, visibleColumns } = get()
-        return tableInfo.length === visibleColumns.length ? "*" : visibleColumns.map(escapeSQLIdentifier).join(", ")
+        const { columns, visibleColumns } = get()
+        return identList(columns.length === visibleColumns.length ? columns.map(({ name }) => name) : visibleColumns) || "1"
     }
     return {
         setViewerQuery,
         seedQuery,
         setSort,
         setFilter,
-        listUniqueConstraints,
         reloadTable,
         setPaging,
         getVisibleColumnsSQL,
         setVisibleColumns: async (columns: string[]) => {
             if (columns.length === 0) { throw new Error() }
-            const { tableInfo, sort } = get()
+            const { columns: all, sort } = get()
             columns = [...new Set(columns)]  // remove duplicates
-            if (columns.some((column) => !tableInfo.find((v) => v.name === column))) { throw new Error() }
+            if (columns.some((column) => !all.find((v) => v.name === column))) { throw new Error() }
             // A hidden column cannot stay the sort key, or the order would look unexplained.
             const sortAfter = sort !== null && !columns.includes(sort.column) ? null : sort
             set({
-                visibleColumns: columns.sort((a, b) => tableInfo.findIndex((v) => v.name === a) - tableInfo.findIndex((v) => v.name === b)),
+                visibleColumns: columns.sort((a, b) => all.findIndex((v) => v.name === a) - all.findIndex((v) => v.name === b)),
                 ...(sortAfter !== sort ? { sort: null } : {}),
             })
             await reloadTable(false, false)
         },
-        /** Displays `confirm("Commit changes?")` using a `<dialog>`. */
-        confirm: async () => new Promise<"commit" | "discard changes" | "cancel">((resolve) => {
-            set({
-                isConfirmDialogVisible: (value) => {
-                    set({ isConfirmDialogVisible: false })
-                    resolve(value)
-                }
-            })
-        }),
         getPageMax: () => pageCount(get().paging.numRecords),
-        requireReloading: () => { set({ reloadRequired: true }) },
         rerender: () => set({ _rerender: {} }),
         addErrorMessage: (value: string) => set((s) => ({ errorMessage: s.errorMessage + value + "\n" })),
-        /** Enumerates the column tuples that uniquely select the record. */
-        getRecordSelectors: (record: Record<string, remote.SQLite3Value>): string[][] => {
-            const rowIdColumn = get().rowIdColumn
-            const constraintChoices = (rowIdColumn && rowIdColumn in record ? [[rowIdColumn]] : [])
-                .concat(listUniqueConstraints().sort((a, b) => +b.primary - +a.primary)
-                    .map(({ columns }) => columns)
-                    .filter((columns) => columns.every((column) => record[column] !== null && record[column] !== undefined)))
-            return [...new Set(constraintChoices.map((columns) => JSON.stringify(columns.sort((a, b) => a.localeCompare(b)))))].map((columns) => JSON.parse(columns))  // Remove duplicates
-        },
+        /** Reloads the table list and the visible rows. This is the only refresh path: the session does not poll. */
         reloadAllTables: async (selectTable?: string) => {
-            set({ reloadRequired: false })
             const state = get()
-
-            // List tables
-            const newTableList = await remote.getTableList()
-
+            const newTableList = await getTableList()
             if (!deepEqual(newTableList, state.tableList)) {
-                // If the list of tables is changed
                 let newTableName = selectTable ?? state.tableName
                 if (!newTableList.some((table) => table.name === newTableName)) {
                     newTableName = newTableList[0]?.name
@@ -351,7 +261,6 @@ export const useTableStore = createStore("useTableStore", {
                 set({ tableList: newTableList })
                 await setViewerQuery({ tableName: newTableName })
             } else {
-                // If the list of tables is not changed
                 await reloadTable(true, true)
             }
         },
@@ -366,34 +275,28 @@ export const Table = () => {
     const sort = useTableStore((s) => s.sort)
     const setSort = useTableStore((s) => s.setSort)
     const viewerLoading = useTableStore((s) => s.viewerLoading)
-    const tableInfo = useTableStore((s) => s.tableInfo)
+    const columns = useTableStore((s) => s.columns)
     const autoIncrement = useTableStore((s) => s.autoIncrement)
     const records = useTableStore((s) => s.records)
-    const input = useTableStore((s) => s.input)
     const setPaging = useTableStore((s) => s.setPaging)
     const visibleColumns = useTableStore((s) => s.visibleColumns)
     const setVisibleColumns = useTableStore((s) => s.setVisibleColumns)
+    const rowKey = useTableStore((s) => s.rowKeyColumn)
 
-    const alterTable = useEditorStore((s) => s.alterTable)
-    const selectedRow = useEditorStore((s) => s.statement === "DELETE" ? s.row : null)
-    const selectedDataRow = useEditorStore((s) => s.statement === "UPDATE" ? s.row : null)
-    const selectedDataColumn = useEditorStore((s) => s.statement === "UPDATE" ? s.column : null)
-    const beforeUnmount = useEditorStore((s) => s.beforeUnmount)
     const [previewSelection, setPreviewSelection] = useState<{ table: string | undefined, query: string, page: bigint, row: number, record: typeof records[number] } | null>(null)
     const previewQuery = useTableStore((s) => s.useCustomViewerQuery ? s.customViewerQuery : "")
 
-    const columnWidthCaches = persistentRef<Record<string, (number | undefined | null)[]>>("columnWidths_v3", {})
+    const columnWidthCaches = persistentRef<Record<string, (number | undefined | null)[]>>("columnWidths_v4", {})
     const getColumnWidths = () => {
         const result: number[] = []
-        for (let i = 0; i < tableInfo.length; i++) {
-            result.push(columnWidthCaches.current[tableName ?? ""]?.[i] ?? (tableInfo.length === 1 ? 250 : 150))
+        for (let i = 0; i < columns.length; i++) {
+            result.push(columnWidthCaches.current[tableName ?? ""]?.[i] ?? (columns.length === 1 ? 250 : 150))
         }
         return result
     }
     const tableRef = useRef<HTMLTableElement>(null)
 
     const tableType = useTableStore((s) => s.tableList.find(({ name }) => name === s.tableName)?.type)
-    const foreignKeyList = useTableStore((s) => s.foreignKeyList)
     /** True while the pointer is dragging a column border, so that the click that ends the drag does not sort. */
     const resized = useRef(false)
 
@@ -407,7 +310,7 @@ export const Table = () => {
                 <thead class="text-black bg-[var(--gutter-color)] [outline:rgb(181,181,181)_1px_solid]">
                     <tr>
                         <th class="font-normal select-none pt-[3px] pb-[3px] pl-[1em] pr-[1em]"></th>
-                        {tableInfo.filter((v) => visibleColumns.includes(v.name)).map(({ name, notnull, pk, type, dflt_value }, i) => <th
+                        {columns.filter((v) => visibleColumns.includes(v.name)).map(({ name, type, nullable, default: defaultValue, primaryKey, autoIncrement: isAutoIncrement }, i) => <th
                             style={{ width: getColumnWidths()[i]! }}
                             class={"font-normal select-none clickable" + (sort?.column === name ? " sorted" : "")}
                             title={`Sort by ${name}`}
@@ -432,15 +335,12 @@ export const Table = () => {
                                 if (rect.right - ev.clientX < 20) {
                                     resized.current = true
                                     const mouseMove = (ev: MouseEvent) => {
-                                        columnWidthCaches.current = produce(columnWidthCaches.current, (d) => {
-                                            if (!Array.isArray(d[tableName ?? ""])) {
-                                                d[tableName ?? ""] = []
-                                            }
-                                            d[tableName ?? ""]![i] = Math.max(50, ev.clientX - rect.left)
-                                        })
-                                        th.style.width = columnWidthCaches.current[tableName ?? ""]![i]! + "px"
+                                        const widths = [...(columnWidthCaches.current[tableName ?? ""] ?? [])]
+                                        widths[i] = Math.max(50, ev.clientX - rect.left)
+                                        columnWidthCaches.current = { ...columnWidthCaches.current, [tableName ?? ""]: widths }
+                                        th.style.width = widths[i]! + "px"
                                         for (const td of tableRef.current?.querySelectorAll<HTMLElement>(`td:nth-child(${i + 2})`) ?? []) {
-                                            td.style.maxWidth = columnWidthCaches.current[tableName ?? ""]![i]! + "px"
+                                            td.style.maxWidth = widths[i]! + "px"
                                         }
                                     }
                                     document.body.classList.add("ew-resize")
@@ -462,22 +362,6 @@ export const Table = () => {
                                     <button onClick={() => { setSort({ column: name, direction: "desc" }).catch(console.error) }}>Sort Descending</button>
                                     {sort?.column === name && <button onClick={() => { setSort(null).catch(console.error) }}>Clear Sort</button>}
                                     <hr />
-                                    {tableName !== undefined && tableType === "table" && <button onClick={async () => {
-                                        if (!await beforeUnmount()) { return }
-                                        await alterTable(tableName, name, "RENAME COLUMN")
-                                        flash(document.querySelector("#editor")!)
-                                    }}>Rename…</button>}
-                                    {tableName !== undefined && tableType === "table" && <button onClick={async () => {
-                                        if (!await beforeUnmount()) { return }
-                                        await alterTable(tableName, name, "DROP COLUMN")
-                                        flash(document.querySelector("#editor")!)
-                                    }}>Delete…</button>}
-                                    {tableName !== undefined && tableType === "table" && <button onClick={async () => {
-                                        if (!await beforeUnmount()) { return }
-                                        await alterTable(tableName, name, "ADD COLUMN")
-                                        flash(document.querySelector("#editor")!)
-                                    }}>Add Column…</button>}
-                                    <hr />
                                     <button disabled={visibleColumns.length === 1} onClick={async () => {
                                         await setVisibleColumns(visibleColumns.filter((v) => v !== name))
                                     }}>Hide</button>
@@ -489,11 +373,9 @@ export const Table = () => {
                                 {name}
                                 <span class="italic opacity-70">
                                     {!!type && <span> {type}</span>}
-                                    {!!notnull && <span> NOT NULL</span>}
-                                    {dflt_value !== null && <span> DEFAULT {dflt_value}</span>}
-                                    {!!pk && <span> {autoIncrement ? <>PRIMARY KEY AUTOINCREMENT</> : <>PRIMARY KEY</>}</span>}
-                                    {foreignKeyList.filter(({ to }) => to === name)
-                                        .map((foreignKey) => <span> REFERENCES {escapeSQLIdentifier(foreignKey.table)}({escapeSQLIdentifier(foreignKey.from)})</span>)}
+                                    {!nullable && <span> NOT NULL</span>}
+                                    {defaultValue !== null && <span> DEFAULT {defaultValue}</span>}
+                                    {primaryKey && <span> {isAutoIncrement ? <>PRIMARY KEY AUTO_INCREMENT</> : <>PRIMARY KEY</>}</span>}
                                 </span>
                             </code>
                             {sort?.column === name && <span class="ml-1 text-primary-highlight" aria-hidden="true">{sort.direction === "asc" ? "▲" : "▼"}</span>}
@@ -509,11 +391,11 @@ export const Table = () => {
                     </tr>)}
 
                     {/* Rows */}
-                    {!showSkeleton && records.map((record, row) => <TableRow selected={selectedRow === row || (previewSelection !== null && previewSelection.table === tableName && previewSelection.query === previewQuery && previewSelection.page === visibleAreaTop && previewSelection.row === row && previewSelection.record === record)} onPreview={() => setPreviewSelection({ table: tableName, query: previewQuery, page: visibleAreaTop, row, record })} key={row} row={row} selectedColumn={selectedDataColumn} input={selectedDataRow === row ? input : null} record={record} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(row) + 1n} />)}
+                    {!showSkeleton && records.map((record, row) => <TableRow selected={previewSelection !== null && previewSelection.table === tableName && previewSelection.query === previewQuery && previewSelection.page === visibleAreaTop && previewSelection.row === row && previewSelection.record === record} onPreview={() => setPreviewSelection({ table: tableName, query: previewQuery, page: visibleAreaTop, row, record })} key={row} row={row} record={record} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(row) + 1n} rowKey={rowKey} />)}
 
                     {/* Margin */}
                     {/* NOTE: `visibleAreaSize - records.length` can be negative while resizing the table. */}
-                    {!showSkeleton && Array(Math.max(0, visibleAreaSize - records.length)).fill(0).map((_, row) => <EmptyTableRow key={row} row={row} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(records.length + row) + 1n} />)}
+                    {!showSkeleton && Array(Math.max(0, visibleAreaSize - records.length)).fill(0).map((_, row) => <EmptyTableRow key={row} columnWidths={getColumnWidths()} rowNumber={visibleAreaTop + BigInt(records.length + row) + 1n} />)}
                 </tbody>
             </table>
         </div>
@@ -554,25 +436,14 @@ const PageInput = (props: { page: bigint, totalPages: bigint, disabled: boolean,
     />
 }
 
-const TableRow = (props: { selected: boolean, onPreview: () => void, readonly selectedColumn: string | null, input: { readonly draftValue: JSXInternal.Element, readonly textarea: HTMLTextAreaElement | null } | null, record: { readonly [key in string]: Readonly<remote.SQLite3Value> }, rowNumber: bigint, row: number, columnWidths: readonly number[] }) => {
-    if (props.rowNumber <= 0) {
-        throw new Error(props.rowNumber + "")
-    }
+const TableRow = (props: { selected: boolean, onPreview: () => void, readonly record: { readonly [key in string]: Readonly<remote.MySqlValue> }, rowNumber: bigint, row: number, columnWidths: readonly number[], rowKey: string | null }) => {
     const tableName = useTableStore((s) => s.tableName)
-    const tableInfo = useTableStore((s) => s.tableInfo)
+    const columns = useTableStore((s) => s.columns)
     const visibleColumns = useTableStore((s) => s.visibleColumns)
-    const rowIdColumn = useTableStore((s) => s.rowIdColumn)
     const selectedCell = useTableStore((s) => s.selectedCell)
 
-    const delete_ = useEditorStore((s) => s.delete_)
-    const update = useEditorStore((s) => s.update)
-    const beforeUnmount = useEditorStore((s) => s.beforeUnmount)
-
-    const [cursorVisibility, setCursorVisibility] = useState(true)
-    const onFocusOrMount = useCallback(() => { setCursorVisibility(true) }, [])
-    const onBlurOrUnmount = useCallback(() => { setCursorVisibility(false) }, [])
     const preview = () => {
-        const record = Object.fromEntries(tableInfo.map(({ name }) => [name, props.record[name]]))
+        const record = Object.fromEntries(columns.map(({ name }) => [name, props.record[name]]))
         const content = JSON.stringify(record, (_key, value) => {
             if (typeof value === "bigint") { const number = Number(value); return Number.isSafeInteger(number) ? number : { type: "INTEGER", value: value.toString() } }
             if (value instanceof Uint8Array) { return { type: "BLOB", hex: blob2hex(value) } }
@@ -596,63 +467,31 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly se
             onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); preview() } }}
             onContextMenu={(ev) => {
                 renderContextmenu(ev, <>
-                    <button onClick={async () => {
-                        if (tableName === undefined) { return }
-                        if (!await beforeUnmount()) { return }
-                        await delete_(tableName, props.record, props.row)
-                    }}>Delete…</button>
-                    <hr />
                     <button onClick={() => navigator.clipboard.writeText(props.rowNumber + "")}>Copy Row Number</button>
-                    {rowIdColumn && <button onClick={() => navigator.clipboard.writeText(props.record[rowIdColumn] + "")}>Copy Rowid</button>}
+                    {props.rowKey && <button onClick={() => navigator.clipboard.writeText(props.record[props.rowKey!] + "")}>Copy {props.rowKey}</button>}
                 </>)
             }}
             data-testid={`row number ${props.rowNumber}`}>{props.rowNumber}</td>
 
         {/* Cells */}
-        {tableInfo.filter((v) => visibleColumns.includes(v.name)).map(({ name }, i) => {
-            const value = props.record[name] as remote.SQLite3Value
-            const input = props.selectedColumn === name ? props.input : undefined
+        {columns.filter((v) => visibleColumns.includes(v.name)).map(({ name }, i) => {
+            const value = props.record[name] as remote.MySqlValue
             const isSelected = selectedCell?.row === props.row && selectedCell.column === name
-            const edit = async () => {
-                if (tableName === undefined) { return }
-                if (!await beforeUnmount()) { return }
-                update(tableName, name, props.row)
-            }
-            const onMouseDown = async (ev: MouseEvent) => {
-                if (ev.target instanceof HTMLTextAreaElement) { return }  // in-place input
-                ev.preventDefault()
+            const select = (ev: MouseEvent) => {
                 if (ev.button === 2) { return }
-                const editorState = useEditorStore.getState()
-                if (editorState.statement === "UPDATE" && editorState.row === props.row && editorState.column === name) { return }
-                if (tableName === undefined) { return }
-                if (isSelected) {
-                    // The second click on the same cell starts editing.
-                    await edit()
-                    return
-                }
-                if (!await beforeUnmount()) { return }
+                ev.preventDefault()
                 useTableStore.setState({ selectedCell: { row: props.row, column: name } })
                 if (ev.currentTarget instanceof HTMLElement) { ev.currentTarget.focus() }
             }
             return <td
-                class={"pl-[10px] pr-[10px] overflow-hidden border-r-[1px] border-[var(--td-border-color)] border-b-[1px] border-b-[var(--td-border-color)] " + (tableName !== undefined ? "clickable" : "") + " " + (input ? "editing" : "") + (isSelected && !input ? " selected" : "")}
+                class={"pl-[10px] pr-[10px] overflow-hidden border-r-[1px] border-[var(--td-border-color)] border-b-[1px] border-b-[var(--td-border-color)] clickable " + (isSelected ? "selected" : "")}
                 style={{ maxWidth: props.columnWidths[i] }}
                 tabIndex={isSelected ? 0 : -1}
                 aria-selected={isSelected}
                 data-cell-selected={isSelected ? "true" : undefined}
-                onMouseDown={onMouseDown}
-                onDblClick={() => { if (!input) { edit().catch(console.error) } }}
-                onKeyDown={(ev) => {
-                    // Keys typed in the in-place input must not start a second edit.
-                    if (ev.target instanceof HTMLTextAreaElement) { return }
-                    if (ev.key === "Enter" || ev.key === "F2") { ev.preventDefault(); ev.stopPropagation(); edit().catch(console.error) }
-                }}
+                onMouseDown={select}
                 onContextMenu={(ev) => {
-                    if (input?.textarea && !input.textarea.classList.contains("single-click")) { return }  // if the in-place input is visible
                     renderContextmenu(ev, <>
-                        <button onClick={onMouseDown}>Update</button>
-                        {remote.isVSCode && typeof value === "string" && <button onClick={() => remote.openCellInEditor(value, name, tableName, `row ${props.rowNumber}`, "saved").catch(console.error)}>Preview Saved Value in Editor</button>}
-                        <hr />
                         <button onClick={() => {
                             if (value instanceof Uint8Array) {  // BLOB
                                 navigator.clipboard.writeText(blob2hex(value)).catch(console.error)
@@ -663,82 +502,27 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly se
                             }
                         }}>Copy Text</button>
                         <button onClick={() => navigator.clipboard.writeText(JSON.stringify(value))}>Copy JSON</button>
-                        <button onClick={() => navigator.clipboard.writeText(unsafeEscapeValue(value))}>Copy SQL</button>
                     </>)
                 }}
                 data-testid={`cell ${props.rowNumber - 1n}, ${i}`}>
-                <pre class={"overflow-hidden text-ellipsis whitespace-nowrap max-w-[50em] [font-size:inherit] " + (input?.textarea && cursorVisibility ? "cursor-line" : "")}>
-                    <span class="select-none">{input?.draftValue ?? <CellValue value={value} />}</span>
-                    {input?.textarea && <MountInput element={input.textarea} onFocusOrMount={onFocusOrMount} onBlurOrUnmount={onBlurOrUnmount} />}
+                <pre class="overflow-hidden text-ellipsis whitespace-nowrap max-w-[50em] [font-size:inherit]">
+                    <span class="select-none"><CellValue value={value} /></span>
                 </pre>
             </td>
         })}
-    </tr>, [props.selected, props.onPreview, props.selectedColumn, props.input?.draftValue, props.input?.textarea, tableName, tableInfo, visibleColumns, props.record, props.rowNumber, cursorVisibility, selectedCell?.row, selectedCell?.column])  // excluded: props.columnWidth
+    </tr>, [props.selected, props.onPreview, tableName, columns, visibleColumns, props.record, props.rowNumber, props.rowKey, selectedCell?.row, selectedCell?.column])  // excluded: props.columnWidth
 }
 
 /** Renders an empty row that is shown at the bottom of the table. */
-const EmptyTableRow = (props: { row: number, rowNumber: bigint, columnWidths: readonly number[] }) => {
-    const tableName = useTableStore((s) => s.tableName)
-    const tableInfo = useTableStore((s) => s.tableInfo)
+const EmptyTableRow = (props: { rowNumber: bigint, columnWidths: readonly number[] }) => {
+    const columns = useTableStore((s) => s.columns)
     const visibleColumns = useTableStore((s) => s.visibleColumns)
 
-    const insert = useEditorStore((s) => s.insert)
-    const beforeUnmount = useEditorStore((s) => s.beforeUnmount)
-    const statement = useEditorStore((s) => s.statement)
-
-    const openInsertEditor = async () => {
-        if (!tableName) { return }
-        if (statement !== "INSERT") {
-            if (!await beforeUnmount()) { return }
-            await insert(tableName)
-        }
-    }
-
     return <tr>
-        {/* Row number */}
-        <td
-            class={"pl-[10px] pr-[10px] bg-[var(--gutter-color)] overflow-hidden sticky left-0 whitespace-nowrap text-center text-black select-none border-r-[1px] border-r-[var(--td-border-color)] " + (tableName !== undefined && props.row === 0 ? "clickable" : "")}
-            onMouseDown={(ev) => {
-                ev.preventDefault()
-                if (props.row !== 0) { return }
-                (async () => {
-                    await openInsertEditor()
-
-                    // Find a textarea
-                    // NOTE: On chrome querySelector() always returns an element, but on VSCode's webview rendering is slow and querySelector() always returns null for the first try.
-                    const textarea = await querySelectorWithRetry<HTMLTextAreaElement>("#editor textarea")
-                    if (!textarea) { return }
-
-                    // Select the textarea
-                    textarea.focus()
-                    textarea.select()
-
-                    // Play an animation
-                    flash(textarea)
-                })().catch(console.error)
-            }}>{props.row === 0 && <svg class="inline w-[1em] h-[1em]"><use xlinkHref="#add" /></svg>}</td>
-
-        {/* Cells */}
-        {tableInfo.filter((v) => visibleColumns.includes(v.name)).map(({ }, i) => <td
-            class={"pl-[10px] pr-[10px] overflow-hidden border-r-[1px] border-r-[var(--td-border-color)] border-b-[1px] border-b-[var(--td-border-color)] " + (tableName !== undefined ? "clickable" : "")}
-            style={{ maxWidth: props.columnWidths[i] }}
-            onMouseDown={(ev) => {
-                ev.preventDefault();
-                (async () => {
-                    await openInsertEditor()
-
-                    // NOTE: querySelector() always returns an element in the browser, but in VSCode's webview, rendering is slow and querySelector() always returns null if you don't wait.
-                    const textarea = await querySelectorWithRetry<HTMLTextAreaElement>(`#insert-column${i + 1} textarea`)
-                    if (!textarea) { return }
-
-                    // Select the textarea
-                    textarea.focus()
-                    textarea.select()
-
-                    // Play an animation
-                    flash(textarea)
-                })().catch(console.error)
-            }}>
+        <td class="pl-[10px] pr-[10px] bg-[var(--gutter-color)] overflow-hidden sticky left-0 whitespace-nowrap text-center text-black select-none border-r-[1px] border-r-[var(--td-border-color)]">{""}</td>
+        {columns.filter((v) => visibleColumns.includes(v.name)).map((_, i) => <td
+            class="pl-[10px] pr-[10px] overflow-hidden border-r-[1px] border-r-[var(--td-border-color)] border-b-[1px] border-b-[var(--td-border-color)]"
+            style={{ maxWidth: props.columnWidths[i] }}>
             <pre class="overflow-hidden text-ellipsis whitespace-nowrap max-w-[50em] [font-size:inherit] ">
                 <span class="select-none">&nbsp;</span>
             </pre>
@@ -746,109 +530,25 @@ const EmptyTableRow = (props: { row: number, rowNumber: bigint, columnWidths: re
     </tr>
 }
 
-/** Renders `<span>{props.element}</span>` and focuses the `props.element`. `props.onFocusOrMount` and `props.onBlurOrUnmount` will be called when the `props.element` is focused/unfocused or the value of `props.element` is changed. */
-const MountInput = (props: { element: HTMLTextAreaElement, onFocusOrMount: () => void, onBlurOrUnmount: () => void }) => {
-    const ref = useRef<HTMLSpanElement>(null)
-    useEffect(() => {
-        ref.current?.append(props.element)
-        props.onFocusOrMount()
-        props.element.addEventListener("focus", () => { props.onFocusOrMount() })
-        props.element.addEventListener("blur", () => { props.onBlurOrUnmount() })
-        props.element.focus()
-        props.element.select()
-        return () => {
-            props.onBlurOrUnmount()
-            if (ref.current?.contains(props.element)) { ref.current.removeChild(props.element) }
-        }
-    }, [props.element])
-    return <span ref={ref}></span>
-}
+export const blob2hex = (blob: Uint8Array, maxLength?: number) =>
+    Array.from(blob.slice(0, maxLength), (x) => x.toString(16).padStart(2, "0")).join("") + (maxLength !== undefined && blob.length > maxLength ? "..." : "")
 
-/** Not verified for safety. */
-export const unsafeEscapeValue = (value: remote.SQLite3Value) => {
-    if (value instanceof Uint8Array) {
-        return `x'${blob2hex(value, undefined)}'`
-    } else if (value === null) {
-        return "NULL"
-    } else if (typeof value === "string") {
-        return `'${value.replaceAll("'", "''").replaceAll("\r", "\\r").replaceAll("\n", "\\n")}'`
-    } else if (typeof value === "number") {
-        return /^[+\-]?\d+$/.test("" + value) ? "" + value + ".0" : "" + value
-    } else {
-        return "" + value
-    }
-}
-
-/** Renders a DOM Node. */
-const DOMNode = (props: { node: Node }) => {
-    const ref = useRef<HTMLSpanElement>(null)
-    useLayoutEffect(() => {
-        if (!ref.current) { return }
-        ref.current.append(props.node)
-        return () => { ref.current?.removeChild(props.node) }
-    }, [props.node])
-    return <span ref={ref}></span>
-}
-
-export const CellValue = ({ value }: { value: remote.SQLite3Value }) => {
-    const [content, setContent] = useState<{ value: remote.SQLite3Value, node?: preact.ComponentChildren }>({ value })
-    useEffect(() => {
-        if (!(value instanceof Uint8Array)) { return }
-        let unmounted = false
-        let objectUrl: string | undefined
-        fileTypeFromBuffer(value).then((result) => {
-            if (!result || unmounted) { return }
-            const type = result.mime
-            if (type.startsWith("image/")) {
-                objectUrl = URL.createObjectURL(new Blob([value], { type }))
-                setContent({ value, node: <img class="max-h-[200px]" src={objectUrl}></img> })
-            } else if (type.startsWith("audio/")) {
-                objectUrl = URL.createObjectURL(new Blob([value], { type }))
-                setContent({ value, node: <audio class="h-[19px] w-[80%]" controls src={objectUrl}></audio> })
-            } else if (type.startsWith("video/")) {
-                objectUrl = URL.createObjectURL(new Blob([value], { type }))
-                setContent({ value, node: <video class="max-h-[200px]" controls src={objectUrl}></video> })
-            } else {
-                setContent({ value, node: <span class="text-[var(--data-null)]">{type}: {`x'${blob2hex(value, 8)}'`}</span> })
-            }
-        }).catch(console.error)
-        return () => { unmounted = true; if (objectUrl) { URL.revokeObjectURL(objectUrl) } }
-    }, [value])
-    if (content.value === value && content.node) {
-        return <>{content.node}</>
-    } else if (value instanceof Uint8Array) {  // BLOB
-        return <span class="text-[var(--data-null)]">{`x'${blob2hex(value, 8)}'`}</span>
+/** Renders a cell value: text with a bounded preview, binary as hex, NULL as NULL. */
+export const CellValue = ({ value }: { value: remote.MySqlValue }) => {
+    if (value instanceof Uint8Array) {  // BINARY / BLOB
+        return <span class="text-[var(--data-null)]">{`0x${blob2hex(value, 8)}`}</span>
     } else if (value === null) {  // NULL
         return <span class="text-[var(--data-null)]">NULL</span>
-    } else if (typeof value === "string") {  // TEXT
-        // Only render a bounded preview; the original value remains available for editing and copying.
+    } else if (typeof value === "string") {
+        // Only render a bounded preview; the original value remains available for copying.
         const limit = 512
         let end = Math.min(value.length, limit)
         if (end < value.length && end > 0 && value.charCodeAt(end - 1) >= 0xd800 && value.charCodeAt(end - 1) <= 0xdbff) { end-- }
         const preview = value.slice(0, end).replaceAll("\\", "\\\\").replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n")
         return <span class="text-[var(--data-string)]">{(preview || /* nbsp */"\u00a0") + (end < value.length ? "…" : "")}</span>
-    } else if (typeof value === "number") {  // REAL
-        return <span class="text-[var(--data-number)]">{/^[+\-]?\d+$/.test("" + value) ? `${value}.0` : `${value}`}</span>
-    } else {  // INTEGER
-        return <span class="text-[var(--data-number)]">{"" + value}</span>
-    }
-}
-
-/** https://stackoverflow.com/a/6701665/10710682, https://stackoverflow.com/a/51574648/10710682 */
-export const escapeSQLIdentifier = (ident: string) => {
-    if (ident.includes("\x00")) { throw new Error("Invalid identifier") }
-    return `"${ident.replaceAll('"', '""')}"`
-}
-
-export const blob2hex = (blob: Uint8Array, maxLength?: number) =>
-    Array.from(blob.slice(0, maxLength), (x) => x.toString(16).padStart(2, "0")).join("") + (maxLength !== undefined && blob.length > maxLength ? "..." : "")
-
-export const type2color = (type: "number" | "bigint" | "string" | "null" | "blob" | "default") => {
-    if (type === "number" || type === "bigint") {
-        return "var(--data-number)"
-    } else if (type === "string") {
-        return "var(--data-string)"
+    } else if (typeof value === "number") {
+        return <span class="text-[var(--data-number)]">{`${value}`}</span>
     } else {
-        return "var(--data-null)"
+        return <span class="text-[var(--data-number)]">{"" + value}</span>
     }
 }
