@@ -89,6 +89,14 @@ export const useHistoryStore = createStore("useHistoryStore", {
         record: (entry: HistoryEntry) => { set({ entries: push(get().entries, entry) }); persist() },
         /** Entries are identified by their execution time. */
         remove: (executedAt: number) => { set({ entries: get().entries.filter((entry) => entry.executedAt !== executedAt) }); persist() },
+        /** Puts a deleted entry back where it was, for the undo action. */
+        restore: (entry: HistoryEntry, index: number) => {
+            const entries = [...get().entries]
+            if (entries.some((existing) => existing.executedAt === entry.executedAt)) { return }
+            entries.splice(Math.max(0, Math.min(index, entries.length)), 0, entry)
+            set({ entries: prune(entries) })
+            persist()
+        },
         clear: () => { set({ entries: [] }); persist() },
     }
 })

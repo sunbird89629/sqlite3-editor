@@ -227,6 +227,9 @@ const App = () => {
         }
     }
     const visibleColumnsSQL = useTableStore((s) => s.getVisibleColumnsSQL())
+    const historyCount = useHistoryStore((s) => s.entries.length)
+    /** The three top-level tabs: History is a view of its own, Table and Custom query keep the old modes. */
+    const topTab = viewerTab === "history" ? "history" : useCustomViewerQuery ? "query" : "table"
 
     return <>
         {/* @vscode/codicons/dist/codicon.svg, https://github.com/microsoft/vscode-codicons, Attribution 4.0 International */}
@@ -236,10 +239,6 @@ const App = () => {
 
         <section class="query-area" aria-label="Query and actions">
             <div class="viewer-toolbar">
-                <div class="viewer-modes" role="tablist" aria-label="Data view mode">
-                    <button type="button" role="tab" aria-selected={!useCustomViewerQuery} class={!useCustomViewerQuery ? "active" : ""} onClick={() => { switchMode(false) }} data-testid="mode-table">Table</button>
-                    <button type="button" role="tab" aria-selected={useCustomViewerQuery} class={useCustomViewerQuery ? "active" : ""} onClick={() => { switchMode(true) }} data-testid="mode-query">Custom query{queryDraftDirty && <span class="viewer-dirty-dot" title="This draft has not been run">●</span>}</button>
-                </div>
                 <div class="viewer-globals">
                     <Button onClick={() => { if (remote.isVSCode) { remote.openNativeQuery(tableName).catch(console.error) } else { setShowQueryEditor(!showQueryEditor) } }} data-testid="query-editor-toggle">SQL Editor</Button>
                     <Button secondary onClick={() => { reloadAllTables().catch(console.error) }} data-testid="refresh">Refresh</Button>
@@ -254,13 +253,19 @@ const App = () => {
                             {!useCustomViewerQuery && tableName && <button onClick={() => { setViewerTab("schema") }}>Show Table Schema and Indexes</button>}
                             <button onClick={() => { reloadAllTables().catch(console.error) }}>Refresh</button>
                             {!useCustomViewerQuery && tableName && <button onClick={() => { navigator.clipboard.writeText(tableName).catch(console.error) }}>Copy Table Name</button>}
-                            {tableName && <button onClick={async () => { await useTableStore.getState().seedQuery(`SELECT * FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${JSON.stringify(tableName)}`) }}>Describe Columns in Query Mode</button>}
+                            {tableName && <button onClick={async () => { setViewerTab("data"); await useTableStore.getState().seedQuery(`SELECT * FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${JSON.stringify(tableName)}`) }}>Describe Columns in Query Mode</button>}
                         </div>
                     </details>
                 </div>
             </div>
 
-            {!useCustomViewerQuery
+            <nav class="viewer-tabs" role="tablist" aria-label="Viewer tab">
+                <button type="button" role="tab" aria-selected={topTab === "table"} class={topTab === "table" ? "active" : ""} onClick={() => { setViewerTab("data"); switchMode(false) }} data-testid="mode-table">Table</button>
+                <button type="button" role="tab" aria-selected={topTab === "query"} class={topTab === "query" ? "active" : ""} onClick={() => { setViewerTab("data"); switchMode(true) }} data-testid="mode-query">Custom query{queryDraftDirty && <span class="viewer-dirty-dot" title="This draft has not been run">●</span>}</button>
+                <button type="button" role="tab" aria-selected={topTab === "history"} class={topTab === "history" ? "active" : ""} onClick={() => { setViewerTab("history") }} data-testid="history-button">History{historyCount > 0 && <span class="viewer-tab-count">{historyCount}</span>}</button>
+            </nav>
+
+            {viewerTab !== "history" && (!useCustomViewerQuery
                 ? <h2 class="pt-[var(--page-padding)]">
                     <div class="mb-2">
                         <Highlight>SELECT </Highlight>
@@ -328,11 +333,11 @@ const App = () => {
                         <span class="viewer-query-hint">Read-only · counting a complex query can take a while</span>
                     </div>
                     {(queryError !== "" || invalidQuery !== null) && <p class="viewer-error" role="alert" data-testid="query-error">{queryError !== "" ? queryError : invalidQuery}</p>}
-                </section>}
+                </section>)}
         </section>
 
         <section class="data-area" aria-label="Table data and schema">
-            <div class="viewer-meta" style={{ display: viewerTab === "schema" && !useCustomViewerQuery ? "none" : undefined }}>
+            <div class="viewer-meta" style={{ display: viewerTab === "data" ? undefined : "none" }}>
                 <div class="viewer-meta-info">
                     {useCustomViewerQuery && <span class="viewer-readonly-badge">Read-only</span>}
                     {viewerLoading && <span class="viewer-loading-chip" role="status">Loading…</span>}
@@ -383,15 +388,14 @@ const App = () => {
                 </div>
                 <div class="native-query-body"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
             </section>}
-            <nav class="schema-tabs" aria-label="Table view">
+            {viewerTab !== "history" && <nav class="schema-tabs" aria-label="Table view">
                 <button type="button" class={viewerTab === "data" ? "active" : ""} aria-current={viewerTab === "data" ? "page" : undefined} onClick={() => setViewerTab("data")} data-testid="data-button">Data</button>
                 {!useCustomViewerQuery && <button type="button" class={viewerTab === "schema" ? "active" : ""} aria-current={viewerTab === "schema" ? "page" : undefined} onClick={() => setViewerTab("schema")} data-testid="schema-button">Schema</button>}
-                <button type="button" class={viewerTab === "history" ? "active" : ""} aria-current={viewerTab === "history" ? "page" : undefined} onClick={() => setViewerTab("history")} data-testid="history-button">History</button>
-            </nav>
+            </nav>}
             {/* Schema and Index */}
             {viewerTab === "schema" && !useCustomViewerQuery && <SchemaView onBack={() => setViewerTab("data")} />}
             {/* Query history */}
-            {viewerTab === "history" && <HistoryView onReplay={replay} />}
+            {viewerTab === "history" && <HistoryView onReplay={(entry) => { setViewerTab("data"); replay(entry) }} />}
 
             {/* Table or query result */}
             {viewerTab === "data" && <>

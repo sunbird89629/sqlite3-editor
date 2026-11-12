@@ -36,6 +36,20 @@ const run = async (page: import('@playwright/test').Page, sql: string) => {
 
 const openHistory = (page: import('@playwright/test').Page) => page.getByTestId('history-button').click()
 
+test('history is its own top-level tab that hides the query box and the row meta', async ({ page }) => {
+    await seedQueryTable(page)
+    await run(page, 'SELECT * FROM history_test')
+    await openHistory(page)
+    await expect(page.getByTestId('history-view')).toBeVisible()
+    // The composer and the data meta row belong to the other tabs.
+    await expect(page.getByTestId('custom-query-input')).toHaveCount(0)
+    await expect(page.getByTestId('viewer-filter')).toBeHidden()
+    await expect(page.getByTestId('history-button')).toHaveAttribute('aria-selected', 'true')
+    // Going back shows the query box again with the statement that ran.
+    await page.getByTestId('mode-query').click()
+    await expect(page.getByTestId('custom-query-input')).toHaveValue('SELECT * FROM history_test')
+})
+
 test('history records only successful executions and lists the newest first', async ({ page }) => {
     await seedQueryTable(page)
     await run(page, 'SELECT * FROM history_test')
@@ -68,7 +82,7 @@ test('a statement executed twice in a row keeps one entry', async ({ page }) => 
     await expect(page.getByTestId('history-item')).toContainText('SELECT count(*) FROM history_test')
 })
 
-test('history filters, replays, deletes and clears', async ({ page }) => {
+test('filters, replays and deletes with an undo', async ({ page }) => {
     await seedQueryTable(page)
     await run(page, 'SELECT * FROM history_test')
     await run(page, 'SELECT id FROM history_test')
@@ -76,34 +90,56 @@ test('history filters, replays, deletes and clears', async ({ page }) => {
     await openHistory(page)
     await page.getByTestId('history-filter').fill('SELECT id')
     await expect(page.getByTestId('history-item')).toHaveCount(1)
+    await expect(page.getByTestId('history-match')).toContainText('1 / 2')
     await page.getByTestId('history-filter').fill('nothing matches this')
     await expect(page.getByTestId('history-no-match')).toBeVisible()
-    await page.getByTestId('history-filter').fill('')
+    await page.getByTestId('history-clear-filter').click()
     await expect(page.getByTestId('history-item')).toHaveCount(2)
 
-    // Replaying switches back to the query mode and runs the statement again.
+    // Replaying switches back to the query tab and runs the statement again.
     await page.getByTestId('history-item').nth(1).getByTestId('history-replay').click()
     await expect(page.getByTestId('mode-query')).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByTestId('custom-query-input')).toHaveValue('SELECT * FROM history_test')
     await expect(page.getByTestId('row-count')).toHaveText('3 rows')
+
     // The replay is recorded too: the list is A, B, A.
     await openHistory(page)
     await expect(page.getByTestId('history-count')).toHaveText('3')
     await expect(page.getByTestId('history-item').first()).toContainText('SELECT * FROM history_test')
 
-    // Deleting one entry keeps the others.
+    // Deleting can be undone, and the entry returns to its place.
     await page.getByTestId('history-delete').first().click()
     await expect(page.getByTestId('history-item')).toHaveCount(2)
-    await expect(page.getByTestId('history-item').first()).toContainText('SELECT id FROM history_test')
+    await expect(page.getByTestId('history-undo')).toBeVisible()
+    await page.getByTestId('history-undo-button').click()
+    await expect(page.getByTestId('history-item')).toHaveCount(3)
+    await expect(page.getByTestId('history-item').first()).toContainText('SELECT * FROM history_test')
 
     // Clearing asks first; cancelling keeps everything.
     await page.getByTestId('history-clear').click()
     await page.getByTestId('history-clear-cancel').click()
-    await expect(page.getByTestId('history-item')).toHaveCount(2)
+    await expect(page.getByTestId('history-item')).toHaveCount(3)
     await page.getByTestId('history-clear').click()
     await page.getByTestId('history-clear-confirm').click()
     await expect(page.getByTestId('history-empty')).toBeVisible()
     await expect(page.getByTestId('history-count')).toHaveText('0')
+})
+
+test('arrow keys and Enter work on the history list', async ({ page }) => {
+    await seedQueryTable(page)
+    await run(page, 'SELECT * FROM history_test')
+    await run(page, 'SELECT id FROM history_test')
+    await openHistory(page)
+
+    await page.getByTestId('history-list').click()
+    await expect(page.getByTestId('history-item').first()).toHaveAttribute('data-active', 'true')
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByTestId('history-item').nth(1)).toHaveAttribute('data-active', 'true')
+    await page.keyboard.press('ArrowUp')
+    await expect(page.getByTestId('history-item').first()).toHaveAttribute('data-active', 'true')
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('mode-query')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('custom-query-input')).toHaveValue('SELECT id FROM history_test')
 })
 
 test('history survives a reload and stays empty after clearing', async ({ page }) => {

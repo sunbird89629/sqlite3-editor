@@ -59,7 +59,7 @@
 
 ### Requirement: History 页签浏览
 
-数据区 SHALL 提供与 `Data`、`Schema` 并列的 `History` 页签。该页签 SHALL 按时间倒序列出条目，每条显示语句摘要（单行、超长截断）、所属数据库、执行时间、耗时与行数。该页签 SHALL 提供按文本筛选，且 SHALL 在没有条目时显示空状态。
+查看器 SHALL 提供顶层页签 `Table`、`Custom query`、`History`；`History` SHALL NOT 是数据区的子页签，SHALL 在两种数据模式下都可进入。该页签 SHALL 按时间倒序列出条目，每条显示语句摘要（单行、超长截断）、所属数据库、执行时间、耗时与行数。打开 `History` 时 SHALL 隐藏查询框与数据区元信息。该页签 SHALL 提供按文本筛选、键盘选择（上下移动、Enter 重放、Delete 删除），且 SHALL 在没有条目时显示空状态。
 
 #### Scenario: 查看列表
 - **WHEN** 用户打开 `History` 页签
@@ -72,6 +72,14 @@
 #### Scenario: 空历史
 - **WHEN** 历史为空时打开该页签
 - **THEN** 显示空状态而不是空白区域
+
+#### Scenario: 进入历史时不被数据状态干扰
+- **WHEN** 用户从 `Custom query` 切到 `History`
+- **THEN** 查询框、`Run query` 行与行数/加载状态都不显示，只剩历史面板自己的工具条
+
+#### Scenario: 键盘操作
+- **WHEN** 用户聚焦历史列表后按上下键、再按 Enter
+- **THEN** 选中行随之移动，Enter 重放该条语句
 
 ### Requirement: 重放历史条目
 
@@ -91,7 +99,7 @@
 
 ### Requirement: 删除与清空历史
 
-历史面板 SHALL 支持删除单条条目。清空全部 SHALL 先征求确认，取消时 SHALL 保留全部条目。删除 SHALL 立即持久化。
+历史面板 SHALL 支持删除单条条目，并在删除后短暂提供撤销；撤销 SHALL 把条目放回原来的位置。清空全部 SHALL 先征求确认，取消时 SHALL 保留全部条目。删除 SHALL 立即持久化。
 
 #### Scenario: 删除一条
 - **WHEN** 用户删除列表中的一条
