@@ -1,7 +1,7 @@
 {
   "name": "vscode-sqlite3-editor",
   "displayName": "MySQL Viewer",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "Browse MySQL databases read-only, like a spreadsheet.",
   "main": "extension.js",
   "publisher": "yy0931",
@@ -14,8 +14,9 @@
   },
   "scripts": {
     "build": "pwsh ./build-dev.ps1 || ./build-dev.sh",
-    "vscode:prepublish": "npm run build",
-    "test": "mkdir -p .tmp && npx esbuild mysql-guard.ts --bundle --platform=node --format=cjs --outfile=.tmp/mysql-guard.cjs && npx esbuild mysql-client.ts --bundle --platform=node --format=cjs --external:mysql2 --outfile=.tmp/mysql-client.cjs && node mysql-guard-test.cjs && node mysql-client-test.cjs"
+    "vscode:prepublish": "npm run build:prod",
+    "test": "mkdir -p .tmp && npx esbuild mysql-guard.ts --bundle --platform=node --format=cjs --outfile=.tmp/mysql-guard.cjs && npx esbuild mysql-client.ts --bundle --platform=node --format=cjs --external:mysql2 --outfile=.tmp/mysql-client.cjs && node mysql-guard-test.cjs && node mysql-client-test.cjs",
+    "build:prod": "pwsh ./build.ps1 || ./build.sh"
   },
   "engines": {
     "vscode": "^1.71.0"

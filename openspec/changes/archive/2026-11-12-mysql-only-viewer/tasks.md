@@ -29,9 +29,9 @@
 ## 5. 连接配置、命令与会话面板
 
 - [x] 5.1 `vscode/package.json` 增加 `sqlite3-editor.mysqlConnections`（数组，`id`/`name`/`host`/`port`/`user`/`password`/`database`，密码字段带明文风险说明）与命令 `SQLite3 Editor: Connect to MySQL`；验证命令出现在命令面板，设置项在设置 UI 可编辑。
-- [ ] 5.2 `extension.ts` 实现连接选择器与校验：缺少 `id`/`host`/`database` 的条目被省略；验证手动测试——两个有效条目加一个缺 `host` 的条目，选择器只显示前两个。
-- [ ] 5.3 实现会话面板：key 为 `mysql:<connectionId>:<database>`，`createWebviewPanel` 复用现有 webview 与 `/query` 路由，顶部显示连接名、数据库名与降级提示；验证手动测试连接成功、重复连接聚焦原面板、认证失败显示错误且不渲染数据区三条路径。
-- [ ] 5.4 关闭面板时关闭连接；验证关闭后 `SHOW PROCESSLIST` 中该连接消失，重新打开建立新连接。
+- [x] 5.2 `extension.ts` 实现连接选择器与校验：缺少 `id`/`host`/`database` 的条目被省略；验证手动测试——两个有效条目加一个缺 `host` 的条目，选择器只显示前两个。
+- [x] 5.3 实现会话面板：key 为 `mysql:<connectionId>:<database>`，`createWebviewPanel` 复用现有 webview 与 `/query` 路由，顶部显示连接名、数据库名与降级提示；验证手动测试连接成功、重复连接聚焦原面板、认证失败显示错误且不渲染数据区三条路径。
+- [x] 5.4 关闭面板时关闭连接；验证关闭后 `SHOW PROCESSLIST` 中该连接消失，重新打开建立新连接。
 - [x] 5.5 连接被 `wait_timeout` 断开时提示「连接已断开」并提供重连；验证服务器侧 `KILL` 该连接后查询出现提示与重连按钮，重连后查询恢复。
 
 ## 6. UI 方言收敛与 MySQL 数据浏览
@@ -50,7 +50,7 @@
 ## 8. 集成验证
 
 - [x] 8.1 运行 `cd ui && npx tsc --noEmit && npx playwright test`、`cd vscode && npx tsc --noEmit && node build-extension.cjs`、`cd node-http && npm start`，三项全部成功。
-- [ ] 8.2 手动端到端：配置连接 → 打开会话 → 浏览表与列 → 排序筛选翻页 → 只读查询 → 提交 `DELETE` 被拒 → 关闭面板；验证每步与 `mysql-connection` 规格场景一致。
+- [x] 8.2 手动端到端：配置连接 → 打开会话 → 浏览表与列 → 排序筛选翻页 → 只读查询 → 提交 `DELETE` 被拒 → 关闭面板；验证每步与 `mysql-connection` 规格场景一致。
 - [x] 8.3 验证 `rg -n "sqlite|PRAGMA|rowid|rust" --glob '!node_modules' --glob '!openspec/**' --glob '!package-lock.json'` 的剩余命中都是有意保留的（README 说明、`openspec` 归档、测试数据），无死代码引用。
 
 ## Workflow follow-up
