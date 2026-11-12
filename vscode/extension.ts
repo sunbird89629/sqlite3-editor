@@ -6,6 +6,7 @@ import { applyEdits, format, parse, ParseError } from "jsonc-parser/lib/esm/main
 import { MySqlClient } from "./mysql-client"
 import type { MySqlConnectionConfig } from "./mysql-client"
 import { registerQueryEditor } from "./native-query-editor"
+import { registerSqlCompletion } from "./sql-completion"
 export { registerQueryEditor } from "./native-query-editor"
 
 const packr = new Packr({ useRecords: false, preserveNumericTypes: true })
@@ -28,6 +29,7 @@ const connectionLabel = (config: MySqlConnectionConfig) => config.name || `${con
 
 export const activate = (context: vscode.ExtensionContext) => {
     const queryEditor = registerQueryEditor(context)
+    registerSqlCompletion(context, (session) => queryEditor.getClient(session))
     const sessions = new Map<string, { client: MySqlClient, panel: vscode.WebviewPanel }>()
     const snapshots = new Map<string, string>()
 

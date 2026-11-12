@@ -12,6 +12,9 @@ mysql-client.ts
 mysql-guard.ts
 mysql-client-test.cjs
 mysql-guard-test.cjs
+sql-completion.ts
+sql-completion-core.ts
+sql-completion-test.cjs
 native-query-editor.ts
 tsconfig.json
 **/.gitignore

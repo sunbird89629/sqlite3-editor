@@ -44,6 +44,8 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
 
     return {
         addConnection(db: string, client: MySqlClient) { clients.set(db, client) },
+        /** The session behind a `-- database:` header, used by the completion provider. */
+        getClient(db: string): MySqlClient | undefined { return clients.get(db) },
         removeConnection(db: string, client: MySqlClient) { if (clients.get(db) === client) { clients.delete(db) } },
         addPanel(db: string, panel: vscode.WebviewPanel) {
             const set = panels.get(db) ?? new Set<vscode.WebviewPanel>()

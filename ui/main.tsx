@@ -314,7 +314,7 @@ const App = () => {
                     <span data-testid="row-count">{numRecords.toString()} {numRecords === 1n ? "row" : "rows"}</span>
                     {sort !== null && <span class="viewer-meta-sub">· sorted by {sort.column} {sort.direction === "asc" ? "↑" : "↓"}</span>}
                     {filter.trim() !== "" && <span class="viewer-meta-sub">· filtered</span>}
-                    <span class="viewer-meta-sub" data-testid="capability-notice" title="This session has no SQL analysis engine: completion, code lenses, diagnostics and parameter binding are unavailable.">· no completion or diagnostics</span>
+                    <span class="viewer-meta-sub" data-testid="capability-notice" title="Completion, code lenses and syntax diagnostics are unavailable in this box; completion works in SQL documents.">· completion in SQL documents only</span>
                 </div>
                 <div class="viewer-meta-actions">
                     <input
