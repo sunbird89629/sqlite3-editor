@@ -2,16 +2,22 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { fuzzyFilter } from "./fuzzy"
 import type { ColumnInfo } from "./dialect"
 
-/** The `SELECT` column list: a trigger showing the current columns and a searchable, bulk-toggle popover. */
+/**
+ * The `SELECT` column list: a trigger showing the current columns and a searchable, bulk-toggle
+ * popover. Toggling only edits a draft; Enter applies the draft once, Esc and outside clicks discard
+ * it, so the viewer reloads at most once per visit instead of once per checkbox.
+ */
 export const ColumnPicker = (props: {
     columns: readonly ColumnInfo[]
     visible: readonly string[]
-    /** Receives the whole new selection so a bulk action only reloads the viewer once. */
+    /** Receives the whole new selection when the draft is applied. */
     onChange: (names: string[]) => Promise<void> | void
     /** Rendered before the trigger, e.g. the `SELECT` keyword. */
     children?: preact.ComponentChildren
 }) => {
     const [open, setOpen] = useState(false)
+    /** The selection being edited; `props.visible` is what the viewer currently shows. */
+    const [draft, setDraft] = useState<string[]>([])
     const [query, setQuery] = useState("")
     const [cursor, setCursor] = useState(0)
     const [message, setMessage] = useState("")
@@ -19,24 +25,35 @@ export const ColumnPicker = (props: {
     const triggerRef = useRef<HTMLButtonElement>(null)
     const searchRef = useRef<HTMLInputElement>(null)
 
-    const visible = useMemo(() => new Set(props.visible), [props.visible])
+    const visible = useMemo(() => new Set(draft), [draft])
     const rows = useMemo(() => fuzzyFilter(props.columns, query), [props.columns, query])
+    const pending = draft.length !== props.visible.length || draft.some((name) => !props.visible.includes(name))
 
-    const close = () => {
+    const openPopover = () => {
+        setDraft([...props.visible])
+        setQuery("")
+        setMessage("")
+        setOpen(true)
+    }
+    /** Closes without applying; the viewer keeps showing what it had. */
+    const discard = () => {
+        setDraft([...props.visible])
         setOpen(false)
         triggerRef.current?.focus()
     }
-    const apply = (names: string[], nextMessage = "") => {
-        setMessage(nextMessage)
-        void props.onChange(names)
+    const applyDraft = () => {
+        if (pending) { void props.onChange(draft) }
+        setOpen(false)
+        triggerRef.current?.focus()
     }
     const toggle = (name: string) => {
-        if (visible.has(name)) {
-            if (visible.size === 1) { setMessage("Keep at least one column visible."); return }
-            apply(props.visible.filter((column) => column !== name))
+        setMessage("")
+        if (draft.includes(name)) {
+            if (draft.length === 1) { setMessage("Keep at least one column visible."); return }
+            setDraft(draft.filter((column) => column !== name))
             return
         }
-        apply([...props.visible, name])
+        setDraft([...draft, name])
     }
 
     useEffect(() => { setCursor(0); setMessage("") }, [query, open])
@@ -47,6 +64,7 @@ export const ColumnPicker = (props: {
         const onPointerDown = (ev: PointerEvent) => {
             const target = ev.target as Node
             if (popoverRef.current?.contains(target)) { return }
+            setDraft([...props.visible])
             setOpen(false)
         }
         // Esc clears the filter first and closes on the next press, wherever the focus is.
@@ -55,7 +73,7 @@ export const ColumnPicker = (props: {
             ev.preventDefault()
             ev.stopPropagation()
             const input = searchRef.current
-            if (input !== null && input.value !== "") { setQuery(""); input.focus() } else { setOpen(false); triggerRef.current?.focus() }
+            if (input !== null && input.value !== "") { setQuery(""); input.focus() } else { discard() }
         }
         document.addEventListener("pointerdown", onPointerDown)
         document.addEventListener("keydown", onKeyDown, true)
@@ -72,7 +90,7 @@ export const ColumnPicker = (props: {
             ev.preventDefault()
             const row = rows[cursor]
             if (row !== undefined) { toggle(row.name) }
-        } else if (ev.key === "Enter") { ev.preventDefault(); close() }
+        } else if (ev.key === "Enter") { ev.preventDefault(); applyDraft() }
     }
 
     const matchingVisible = rows.filter((row) => visible.has(row.name)).length
@@ -91,7 +109,7 @@ export const ColumnPicker = (props: {
                 aria-expanded={open}
                 data-testid="column-picker-trigger"
                 class="column-picker-trigger"
-                onClick={() => { setOpen(!open); setQuery(""); setMessage("") }}>{triggerLabel}</button>
+                onClick={() => { if (open) { discard() } else { openPopover() } }}>{triggerLabel}</button>
 
             {open && <div ref={popoverRef} class="column-picker-popover" role="dialog" aria-label="Visible columns" data-testid="column-picker">
                 <div class="column-picker-head">
@@ -119,7 +137,7 @@ export const ColumnPicker = (props: {
                         type="button"
                         class="column-picker-link"
                         disabled={rows.length === 0 || matchingVisible === rows.length}
-                        onClick={() => apply([...new Set([...props.visible, ...rows.map((row) => row.name)])])}
+                        onClick={() => setDraft([...new Set([...draft, ...rows.map((row) => row.name)])])}
                         data-testid="column-picker-select-all">{query === "" ? "Select all" : `Select ${rows.length} match${rows.length === 1 ? "" : "es"}`}</button>
                     <span class="column-picker-sep">·</span>
                     <button
@@ -129,9 +147,10 @@ export const ColumnPicker = (props: {
                         onClick={() => {
                             // Clear the matches; only when nothing outside the filter stays visible do we keep one.
                             const matched = rows.filter((row) => visible.has(row.name)).map((row) => row.name)
-                            const outside = props.visible.filter((name) => !matched.includes(name))
+                            const outside = draft.filter((name) => !matched.includes(name))
                             const next = outside.length > 0 ? outside : matched.slice(0, 1)
-                            apply(next, outside.length === 0 && matched.length > 1 ? "Keep at least one column visible." : "")
+                            setDraft(next)
+                            setMessage(outside.length === 0 && matched.length > 1 ? "Keep at least one column visible." : "")
                         }}
                         data-testid="column-picker-clear-all">{query === "" ? "Clear all" : `Clear ${rows.length} match${rows.length === 1 ? "" : "es"}`}</button>
                     {query !== "" && <span class="column-picker-hint">{rows.length} match{rows.length === 1 ? "" : "es"}</span>}
@@ -163,7 +182,8 @@ export const ColumnPicker = (props: {
 
                 {message !== "" && <p class="column-picker-error" role="status">{message}</p>}
                 <div class="column-picker-foot">
-                    <kbd>↑</kbd><kbd>↓</kbd> move <kbd>Space</kbd> toggle <kbd>Enter</kbd> done <kbd>Esc</kbd> close
+                    <kbd>↑</kbd><kbd>↓</kbd> move <kbd>Space</kbd> toggle <kbd>Enter</kbd> apply <kbd>Esc</kbd> discard
+                    <span class="column-picker-pending" data-testid="column-picker-pending">{pending ? "· changes are applied on Enter" : ""}</span>
                 </div>
             </div>}
         </span>

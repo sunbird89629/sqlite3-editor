@@ -356,6 +356,7 @@ dialog {
 .column-picker-empty strong { display: block; margin-bottom: 6px; color: inherit; }
 .column-picker-error { padding: 6px 10px; color: var(--vscode-errorForeground, #a53030); background: var(--vscode-inputValidation-errorBackground, #fdf6e7); border-top: 1px solid var(--td-border-color); }
 .column-picker-foot { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--td-border-color); background: var(--vscode-editorWidget-background, #fafbfb); color: var(--vscode-descriptionForeground, #777); font-size: .85em; }
+.column-picker-pending { margin-left: auto; color: var(--vscode-textLink-foreground, #12638c); }
 .column-picker-foot kbd { font-family: var(--vscode-editor-font-family, monospace); font-size: .9em; padding: 0 4px; border: 1px solid var(--td-border-color-active); border-radius: 3px; background: var(--td-border-color); }
 
 /* Loading and stale-result feedback for the viewer. */

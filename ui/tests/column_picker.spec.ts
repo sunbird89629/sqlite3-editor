@@ -7,7 +7,14 @@ const seedColumns = async (page: import('@playwright/test').Page) => {
     await expect(page.getByTestId('row-count')).toHaveText('1 row')
 }
 
-test('the column picker anchors under the column list and toggles columns', async ({ page }) => {
+/** Counts the viewer's data requests so a test can prove when the data reloads. */
+const countQueries = (page: import('@playwright/test').Page) => {
+    const state = { value: 0 }
+    page.on('request', (request) => { if (request.url().includes(':8080/query')) { state.value += 1 } })
+    return state
+}
+
+test('the column picker anchors under the column list and keeps the last column', async ({ page }) => {
     await seedColumns(page)
     const trigger = page.getByTestId('column-picker-trigger')
     const popover = page.getByTestId('column-picker')
@@ -24,34 +31,66 @@ test('the column picker anchors under the column list and toggles columns', asyn
     // The picker does not dim the page like a modal dialog does.
     await expect(page.locator('dialog[open]')).toHaveCount(0)
 
-    // Hiding a column removes it from the viewer header.
-    await page.getByTestId('column-picker-item name').locator('input').uncheck()
-    await expect(page.locator('thead')).not.toContainText('name')
-    await expect(page.locator('thead')).toContainText('payload')
-    // The picker stays open so that several columns can be toggled.
-    await expect(popover).toBeVisible()
-    await expect(page.getByTestId('column-picker-count')).toHaveText('3 / 4')
-
     // Hiding everything but one column is possible...
-    await page.getByTestId('column-picker-item payload').locator('input').uncheck()
-    await page.getByTestId('column-picker-item note').locator('input').uncheck()
-    await expect(page.locator('thead')).not.toContainText('payload')
+    await page.getByTestId('column-picker-item name').locator('input').click()
+    await page.getByTestId('column-picker-item payload').locator('input').click()
+    await page.getByTestId('column-picker-item note').locator('input').click()
+    await expect(page.getByTestId('column-picker-count')).toHaveText('1 / 4')
     // ...but the last visible column cannot be hidden.
     await page.getByTestId('column-picker-item id').locator('input').click()
     await expect(page.locator('.column-picker-error')).toContainText('at least one column')
-    await expect(page.locator('thead')).toContainText('id')
+    await expect(page.getByTestId('column-picker-count')).toHaveText('1 / 4')
 
-    // Re-enabling columns restores them.
-    await page.getByTestId('column-picker-item name').locator('input').check()
-    await page.getByTestId('column-picker-item payload').locator('input').check()
-    await expect(page.locator('thead')).toContainText('name')
-    await expect(page.locator('thead')).toContainText('payload')
-
-    // Escape closes the picker and returns focus to the trigger.
+    // The picker stays open while toggling; Escape discards the draft.
+    await expect(popover).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(popover).toHaveCount(0)
     await expect(trigger).toBeFocused()
     await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('thead')).toContainText('name')
+})
+
+test('toggling only edits a draft; Enter applies it once', async ({ page }) => {
+    await seedColumns(page)
+    const queries = countQueries(page)
+    const trigger = page.getByTestId('column-picker-trigger')
+
+    await trigger.click()
+    await expect(page.getByTestId('column-picker-count')).toHaveText('4 / 4')
+    queries.value = 0
+
+    await page.getByTestId('column-picker-item name').locator('input').click()
+    await page.getByTestId('column-picker-item payload').locator('input').click()
+    await expect(page.getByTestId('column-picker-count')).toHaveText('2 / 4')
+    await expect(page.getByTestId('column-picker-pending')).toContainText('applied on Enter')
+    // Nothing has been reloaded and the grid still shows the old columns.
+    expect(queries.value).toBe(0)
+    await expect(page.locator('thead')).toContainText('name')
+
+    await page.getByTestId('column-picker-search').press('Enter')
+    await expect(page.getByTestId('column-picker')).toHaveCount(0)
+    await expect(page.locator('thead')).not.toContainText('name')
+    await expect(page.locator('thead')).toContainText('id')
+    // One applied change costs one reload, not one per checkbox.
+    await expect.poll(() => queries.value).toBeGreaterThan(0)
+    await expect.poll(() => queries.value).toBeLessThanOrEqual(2)
+})
+
+test('Escape and outside clicks discard the draft', async ({ page }) => {
+    await seedColumns(page)
+    const trigger = page.getByTestId('column-picker-trigger')
+
+    await trigger.click()
+    await page.getByTestId('column-picker-item name').locator('input').click()
+    await page.getByTestId('column-picker-search').press('Escape')
+    await expect(page.getByTestId('column-picker')).toHaveCount(0)
+    await expect(page.locator('thead')).toContainText('name')
+
+    await trigger.click()
+    await page.getByTestId('column-picker-item name').locator('input').click()
+    await page.getByTestId('row-count').click()
+    await expect(page.getByTestId('column-picker')).toHaveCount(0)
+    await expect(page.locator('thead')).toContainText('name')
 })
 
 test('the search filters column names fuzzily', async ({ page }) => {
@@ -83,33 +122,34 @@ test('the search filters column names fuzzily', async ({ page }) => {
 
 test('bulk actions apply to the matches while a filter is active', async ({ page }) => {
     await seedColumns(page)
-    await page.getByTestId('column-picker-trigger').click()
+    const trigger = page.getByTestId('column-picker-trigger')
     const count = page.getByTestId('column-picker-count')
+    await trigger.click()
     await expect(count).toHaveText('4 / 4')
 
     // Clear all without a filter leaves exactly one column.
     await page.getByTestId('column-picker-clear-all').click()
-    await expect(page.getByTestId('column-picker-count')).toHaveText('1 / 4')
+    await expect(count).toHaveText('1 / 4')
 
-    // Filter to two columns and select only those.
+    // Filter to one column and select only that one.
     await page.getByTestId('column-picker-search').fill('pa')
     await page.getByTestId('column-picker-select-all').click()
     await expect(count).toHaveText('2 / 4')
 
     // Clearing the matches keeps the columns outside the filter.
-    await page.getByTestId('column-picker-search').fill('pa')
     await page.getByTestId('column-picker-clear-all').click()
     await expect(count).toHaveText('1 / 4')
-    await expect(page.locator('thead')).toContainText('id')
 
-    // Select all with no filter brings everything back.
+    // Select all with no filter brings everything back, and Enter applies it.
     await page.getByTestId('column-picker-search-clear').click()
     await page.getByTestId('column-picker-select-all').click()
     await expect(count).toHaveText('4 / 4')
+    await page.getByTestId('column-picker-search').press('Enter')
     await expect(page.locator('thead')).toContainText('note')
+    await expect(page.locator('thead')).toContainText('payload')
 })
 
-test('Space toggles the highlighted column and Enter closes the picker', async ({ page }) => {
+test('Space toggles the highlighted column and Enter applies', async ({ page }) => {
     await seedColumns(page)
     const trigger = page.getByTestId('column-picker-trigger')
     await trigger.click()
@@ -129,14 +169,14 @@ test('Space toggles the highlighted column and Enter closes the picker', async (
     await search.press('Space')
     await expect(page.getByTestId('column-picker-count')).toHaveText('3 / 4')
 
-    // Enter is "done": it closes the picker instead of toggling.
+    // Enter applies the draft and closes.
     await search.press('Enter')
     await expect(page.getByTestId('column-picker')).toHaveCount(0)
     await expect(trigger).toBeFocused()
-    await expect(page.getByTestId('column-picker-count')).toHaveCount(0)
+    await expect(page.locator('thead')).not.toContainText('id')
 })
 
-test('Escape clears the filter first, then closes', async ({ page }) => {
+test('Escape clears the filter first, then discards', async ({ page }) => {
     await seedColumns(page)
     await page.getByTestId('column-picker-trigger').click()
     const search = page.getByTestId('column-picker-search')
