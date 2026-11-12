@@ -126,6 +126,10 @@ express()
         state[key] = value
         res.send(packr.pack(null))
     })
+    .post("/session", (req, res) => {
+        // Mirrors the extension host, so the history records the same database name in development.
+        res.send(packr.pack({ database: config.database }))
+    })
     .post("/downloadState", (req, res) => {
         res.send(packr.pack(state))
     })

@@ -104,6 +104,10 @@ export const activate = (context: vscode.ExtensionContext) => {
                         (err) => { snapshots.delete(uri.toString()); res.status(400).send((err as Error).message) },
                     )
                     break
+                } case "/session": {
+                    // The webview has no other way to learn which database it is attached to.
+                    res.send(packr.pack({ database: picked.config.database }))
+                    break
                 } case "/openNativeQuery": {
                     const { tableName, prefill } = unpackr.unpack(body) as { tableName?: string, prefill?: string }
                     queryEditor.open(key, tableName, prefill).then(() => res.send(packr.pack(null)), (err) => res.status(400).send((err as Error).message))

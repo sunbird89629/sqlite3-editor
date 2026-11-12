@@ -53,6 +53,8 @@ export const useTableStore = createStore("useTableStore", {
     columns: [] as ColumnInfo[],
     indexList: [] as IndexInfo[],
     tableSchema: null as string | null,
+    /** The database this session is attached to, shown in the query history. */
+    sessionDatabase: "",
     /** The single column that identifies a row; `null` when the table has no single-column primary key. */
     rowKeyColumn: null as string | null,
     /** Text columns whose values were read as a prefix only; the full value is fetched on demand. */

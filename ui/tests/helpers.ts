@@ -2,8 +2,14 @@ import type { Page } from '@playwright/test'
 
 export const APP_URL = 'http://localhost:5173/'
 
-/** Loads the webview against the development server. */
-export const gotoApp = async (page: Page) => { await page.goto(APP_URL) }
+/**
+ * Loads the webview and waits for it to finish booting (it renders only after reading the workspace
+ * state), so that a test's own `setViewerQuery` cannot race with the startup one.
+ */
+export const gotoApp = async (page: Page) => {
+    await page.goto(APP_URL)
+    await page.getByTestId('mode-table').waitFor()
+}
 
 /**
  * Seeds fixtures through the test-only endpoint of the development server.

@@ -10,6 +10,8 @@ const unpackr = new Unpackr({ largeBigIntToFloat: false, int64AsNumber: false, m
 
 const vscode = window.acquireVsCodeApi?.()
 export const isVSCode = vscode !== undefined
+/** The database this session is connected to; recorded with every history entry. */
+export const session = () => post("/session", {}) as Promise<{ database: string } | undefined>
 export const openNativeQuery = (tableName: string | undefined, prefill?: string) => post("/openNativeQuery", { tableName, prefill })
 /** Opens a read-only snapshot of one row in the VS Code editor. */
 export const openRowInEditor = (content: string, table: string | undefined, row: string) => post("/openRowInEditor", { content, column: "record", table, row })

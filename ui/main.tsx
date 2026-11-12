@@ -7,6 +7,8 @@ import { Button, Highlight, renderContextmenu } from "./components"
 import { escapeIdentifier, getTableList } from "./dialect"
 import { Table, useTableStore } from "./table"
 import { SchemaView } from "./schema_view"
+import { HistoryView } from "./history_view"
+import { useHistoryStore } from "./query-history"
 import { onKeydown } from "./keybindings"
 // @ts-ignore
 import codiconTxt from "./codicon.txt?raw"
@@ -60,8 +62,8 @@ const App = () => {
     const useCustomViewerQuery = useTableStore((s) => s.useCustomViewerQuery)
     const customViewerQuery = useTableStore((s) => s.customViewerQuery)
     const tableName = useTableStore((s) => s.tableName)
-    // The schema tab is a transient view: it always starts on the data tabs.
-    const [isSchemaViewOpen, setIsSchemaViewOpen] = useState(false)
+    // The sub-tabs are a transient view: they always start on the data tab.
+    const [viewerTab, setViewerTab] = useState<"data" | "schema" | "history">("data")
     const tableRef = useRef<HTMLDivElement>(null)
     const moreActionsRef = useRef<HTMLDetailsElement>(null)
 
@@ -138,6 +140,7 @@ const App = () => {
 
     const switchMode = (toQuery: boolean) => {
         if (toQuery === useCustomViewerQuery) { return }
+        if (toQuery && viewerTab === "schema") { setViewerTab("data") }
         setQueryError("")
         // Leaving the query mode with an unexecuted draft asks first; the draft itself is kept either way.
         if (!toQuery && queryDraftDirty) { setPendingLeaveQuery(true); return }
@@ -147,12 +150,35 @@ const App = () => {
         window.clearTimeout(filterTimer.current)
         setFilter(value).catch(console.error)
     }
-    const runQuery = async () => {
-        const sql = queryDraft.trim().replace(/;\s*$/, "")
+    /** Runs a statement through the read-only viewer and records it in the history when it succeeds. */
+    const execute = async (text: string) => {
+        const sql = text.trim().replace(/;\s*$/, "")
         if (sql === "") { setQueryError("Enter a SQL query first."); return }
         if (!/^\s*(select|with|show|desc|describe|explain|table)\b/i.test(sql)) { setQueryError("The viewer is read-only. Use the SQL Editor for other statements."); return }
         setQueryError("")
-        await setViewerQuery({ customViewerQuery: sql }).catch(console.error)
+        const started = performance.now()
+        try {
+            await setViewerQuery({ useCustomViewerQuery: true, customViewerQuery: sql })
+        } catch (err) {
+            console.error(err)
+            return  // a failed statement leaves no history entry
+        }
+        const table = useTableStore.getState()
+        useHistoryStore.getState().record({
+            sql,
+            database: table.sessionDatabase,
+            executedAt: Date.now(),
+            durationMs: performance.now() - started,
+            rows: Number(table.paging.numRecords),
+            truncated: false,
+        })
+    }
+    const runQuery = () => execute(queryDraft)
+    /** Replays a stored statement: the mode switch and the read-only check are the same as typing it. */
+    const replay = (entry: { sql: string }) => {
+        setQueryDraft(entry.sql)
+        setViewerTab("data")
+        void execute(entry.sql)
     }
 
     // Column visibility picker, anchored under the column list in `SELECT ... FROM`.
@@ -225,7 +251,7 @@ const App = () => {
                                 if (moreActionsRef.current) { moreActionsRef.current.open = false }
                             }
                         }}>
-                            {!useCustomViewerQuery && tableName && <button onClick={() => { setIsSchemaViewOpen(true) }}>Show Table Schema and Indexes</button>}
+                            {!useCustomViewerQuery && tableName && <button onClick={() => { setViewerTab("schema") }}>Show Table Schema and Indexes</button>}
                             <button onClick={() => { reloadAllTables().catch(console.error) }}>Refresh</button>
                             {!useCustomViewerQuery && tableName && <button onClick={() => { navigator.clipboard.writeText(tableName).catch(console.error) }}>Copy Table Name</button>}
                             {tableName && <button onClick={async () => { await useTableStore.getState().seedQuery(`SELECT * FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${JSON.stringify(tableName)}`) }}>Describe Columns in Query Mode</button>}
@@ -269,7 +295,7 @@ const App = () => {
                             tables={tableList}
                             onContextMenu={(ev) => {
                                 renderContextmenu(ev, <>
-                                    <button onClick={() => { setIsSchemaViewOpen(!isSchemaViewOpen) }}>Show Table Schema and Indexes</button>
+                                    <button onClick={() => { setViewerTab("schema") }}>Show Table Schema and Indexes</button>
                                     <hr />
                                     <button onClick={() => { navigator.clipboard.writeText(tableName).catch(console.error) }}>Copy Table Name</button>
                                 </>)
@@ -306,7 +332,7 @@ const App = () => {
         </section>
 
         <section class="data-area" aria-label="Table data and schema">
-            <div class="viewer-meta" style={{ display: isSchemaViewOpen && !useCustomViewerQuery ? "none" : undefined }}>
+            <div class="viewer-meta" style={{ display: viewerTab === "schema" && !useCustomViewerQuery ? "none" : undefined }}>
                 <div class="viewer-meta-info">
                     {useCustomViewerQuery && <span class="viewer-readonly-badge">Read-only</span>}
                     {viewerLoading && <span class="viewer-loading-chip" role="status">Loading…</span>}
@@ -357,15 +383,18 @@ const App = () => {
                 </div>
                 <div class="native-query-body"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
             </section>}
-            {!useCustomViewerQuery && <nav class="schema-tabs" aria-label="Table view">
-                <button type="button" class={!isSchemaViewOpen ? "active" : ""} aria-current={!isSchemaViewOpen ? "page" : undefined} onClick={() => setIsSchemaViewOpen(false)}>Data</button>
-                <button type="button" class={isSchemaViewOpen ? "active" : ""} aria-current={isSchemaViewOpen ? "page" : undefined} onClick={() => setIsSchemaViewOpen(true)} data-testid="schema-button">Schema</button>
-            </nav>}
+            <nav class="schema-tabs" aria-label="Table view">
+                <button type="button" class={viewerTab === "data" ? "active" : ""} aria-current={viewerTab === "data" ? "page" : undefined} onClick={() => setViewerTab("data")} data-testid="data-button">Data</button>
+                {!useCustomViewerQuery && <button type="button" class={viewerTab === "schema" ? "active" : ""} aria-current={viewerTab === "schema" ? "page" : undefined} onClick={() => setViewerTab("schema")} data-testid="schema-button">Schema</button>}
+                <button type="button" class={viewerTab === "history" ? "active" : ""} aria-current={viewerTab === "history" ? "page" : undefined} onClick={() => setViewerTab("history")} data-testid="history-button">History</button>
+            </nav>
             {/* Schema and Index */}
-            {isSchemaViewOpen && !useCustomViewerQuery && <SchemaView onBack={() => setIsSchemaViewOpen(false)} />}
+            {viewerTab === "schema" && !useCustomViewerQuery && <SchemaView onBack={() => setViewerTab("data")} />}
+            {/* Query history */}
+            {viewerTab === "history" && <HistoryView onReplay={replay} />}
 
-            {/* Table */}
-            {(!isSchemaViewOpen || useCustomViewerQuery) && <>
+            {/* Table or query result */}
+            {viewerTab === "data" && <>
                 {noTables
                     ? <div class="viewer-empty" data-testid="empty-tables">
                         <strong>This database has no tables</strong>
@@ -412,6 +441,9 @@ const App = () => {
 
 (async () => {
     await remote.downloadState()
+    useHistoryStore.getState().hydrate()
+    const session = await remote.session().catch(() => undefined)
+    if (session?.database) { useTableStore.setState({ sessionDatabase: session.database }) }
     const tableList = await getTableList()
     const tableName = (() => {
         const restored = remote.getState<string>("tableName")

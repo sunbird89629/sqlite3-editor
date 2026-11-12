@@ -19,6 +19,21 @@ Every statement the extension sends is checked twice: an allow list on the clien
 session on the server (`SET SESSION TRANSACTION READ ONLY`). `INSERT`, `UPDATE`, `DELETE`, DDL and
 `SET` cannot run.
 
+## Query history
+
+Every statement that `Custom query` runs successfully is kept in the **History** tab next to Data and
+Schema: the statement, the database it ran against, when it ran, how long it took and how many rows
+it returned.
+
+- Clicking an entry switches back to `Custom query` mode and runs the statement again. Replaying
+  gives you the **current** data, because only the statement is stored, never the rows.
+- A statement executed twice in a row keeps one entry; different statements in between make new ones.
+- The newest 100 entries are kept, each statement is capped at 8,000 characters (marked
+  `truncated`), and the whole list is capped at 256KB.
+- The list lives in the workspace state, so it survives a window reload, is not committed to the
+  repository and is not visible from another workspace. Statements are stored in plain text.
+- Entries can be deleted one by one, or cleared with `Clear all` after a confirmation.
+
 ## Not supported
 
 - Writing data or structure. Use a dedicated MySQL client.
