@@ -3,7 +3,7 @@ import * as remote from "./remote"
 import { persistentRef, renderContextmenu } from "./components"
 import { BigintMath, createStore } from "./util"
 import deepEqual from "fast-deep-equal"
-import { escapeIdentifier, filterClause, getColumns, getIndexes, getTableList, getTableSchema, identList, orderClause, rowKeyColumn } from "./dialect"
+import { escapeIdentifier, filterClause, fullValueSQL, getColumns, getIndexes, getTableList, getTableSchema, identList, isPreviewed, orderClause, rowKeyColumn, selectExpression } from "./dialect"
 import type { ColumnInfo, IndexInfo, TableListItem } from "./dialect"
 
 export const PAGE_SIZE = 10n
@@ -55,6 +55,8 @@ export const useTableStore = createStore("useTableStore", {
     tableSchema: null as string | null,
     /** The single column that identifies a row; `null` when the table has no single-column primary key. */
     rowKeyColumn: null as string | null,
+    /** Text columns whose values were read as a prefix only; the full value is fetched on demand. */
+    truncatedColumns: [] as string[],
     /** Represents whether the active table has an AUTO_INCREMENT column. */
     autoIncrement: false,
     /** the records in the visible area */
@@ -63,6 +65,8 @@ export const useTableStore = createStore("useTableStore", {
     let reloadGeneration = 0
     let schemaTable: string | undefined
     let pageSnapshot: { subquery: string, top: bigint, records: readonly Record<string, remote.MySqlValue>[] } | null = null
+    /** Everything needed to re-read one cell value: the same subquery, filter and order as the page. */
+    let pageContext: { subquery: string, filterSQL: string, filterParams: remote.MySqlValue[], order: string, rowKey: string | null } | null = null
     /** Resets the viewer to the "nothing to show" state (no table selected, or no custom query typed yet). */
     const clearViewer = () => {
         const { paging } = get()
@@ -128,14 +132,19 @@ export const useTableStore = createStore("useTableStore", {
             if (filter.sql !== "") { conditions.push(filter.sql); params.push(...filter.params) }
             if (useAnchor) { conditions.push(`${escapeIdentifier(rowKey!)} > ?`); params.push(anchor as remote.MySqlValue) }
             const where = conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`
-            const selectedSQL = reloadSchema ? (selectedColumns.length === columns.length ? "*" : identList(selectedColumns)) : getVisibleColumnsSQL()
-            const selected = `SELECT ${rowKey !== null && !selectedColumns.includes(rowKey) ? `${escapeIdentifier(rowKey)}, ` : ""}${selectedSQL} FROM ${subquery}${where}${order} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`
+            // Long text columns are read as a prefix: a page of 10 `longtext` values can weigh megabytes.
+            const chosen = reloadSchema ? selectedColumns : getVisibleColumns()
+            const columnByName = new Map(columns.map((column) => [column.name, column]))
+            const expressions = chosen.map((name) => selectExpression(columnByName.get(name) ?? { name, type: "" }))
+            const truncated = chosen.filter((name) => isPreviewed(columnByName.get(name) ?? { name, type: "" }))
+            const selected = `SELECT ${rowKey !== null && !chosen.includes(rowKey) ? `${escapeIdentifier(rowKey)}, ` : ""}${expressions.join(", ")} FROM ${subquery}${where}${order} LIMIT ?${useAnchor ? "" : " OFFSET ?"}`
             const records = (await remote.query(selected, [...params, current.paging.visibleAreaSize, ...(useAnchor ? [] : [current.paging.visibleAreaTop])], { withoutLogging: true, coalesceKey: reloadSchema || reloadRecordCount ? undefined : "visible-page" }))?.records ?? []
             if (generation !== reloadGeneration) { return }
             pageSnapshot = { subquery, top: current.paging.visibleAreaTop, records }
+            pageContext = { subquery, filterSQL: filter.sql, filterParams: filter.params, order, rowKey }
 
             if (!reloadSchema) {
-                set({ records, rowKeyColumn: rowKey, columns, invalidQuery: null, viewerStale: false, selectedCell: null })
+                set({ records, rowKeyColumn: rowKey, columns, truncatedColumns: truncated, invalidQuery: null, viewerStale: false, selectedCell: null })
             } else if (!state.useCustomViewerQuery) {
                 const indexList = await getIndexes(state.tableName!, { withoutLogging: true })
                 const tableSchema = await getTableSchema(state.tableName!, { withoutLogging: true })
@@ -148,6 +157,7 @@ export const useTableStore = createStore("useTableStore", {
                     visibleColumns: selectedColumns,
                     records,
                     rowKeyColumn: rowKey,
+                    truncatedColumns: truncated,
                     autoIncrement: columns.some((column) => column.autoIncrement),
                     tableSchema,
                     indexList,
@@ -161,6 +171,7 @@ export const useTableStore = createStore("useTableStore", {
                     visibleColumns: columns.map(({ name }) => name),
                     records,
                     rowKeyColumn: rowKey,
+                    truncatedColumns: truncated,
                     autoIncrement: false,
                     tableSchema: null,
                     indexList: [],
@@ -220,6 +231,25 @@ export const useTableStore = createStore("useTableStore", {
         set({ filter, paging: { ...get().paging, visibleAreaTop: 0n } })
         await reloadTable(false, true)
     }
+    const getVisibleColumns = () => get().visibleColumns
+    /** Re-reads one cell at full length, using the row key when there is one and the page offset otherwise. */
+    const readFullValue = async (rowIndex: number, column: string, record: Record<string, remote.MySqlValue>): Promise<remote.MySqlValue> => {
+        if (pageContext === null) { throw new Error("The page is not loaded") }
+        const key = pageContext.rowKey
+        const keyed = key !== null && record[key] !== undefined
+        const sql = fullValueSQL({
+            subquery: pageContext.subquery,
+            column,
+            filterSQL: pageContext.filterSQL,
+            order: pageContext.order,
+            rowKey: keyed ? key : null,
+        })
+        const params = keyed
+            ? [...pageContext.filterParams, record[key!] as remote.MySqlValue]
+            : [...pageContext.filterParams, Number(get().paging.visibleAreaTop) + rowIndex]
+        const result = await remote.query(sql, params, { withoutLogging: true })
+        return (result?.records[0]?.value ?? null) as remote.MySqlValue
+    }
     /** Render visibleColumns to be embedded in SQL queries. */
     const getVisibleColumnsSQL = () => {
         const { columns, visibleColumns } = get()
@@ -227,6 +257,7 @@ export const useTableStore = createStore("useTableStore", {
     }
     return {
         setViewerQuery,
+        readFullValue,
         seedQuery,
         setSort,
         setFilter,
@@ -441,12 +472,27 @@ export const cellText = (value: remote.MySqlValue): string =>
     value instanceof Uint8Array ? `0x${blob2hex(value)}` : value === null ? "NULL" : String(value)
 
 /**
+ * Reads the whole value of one cell. The page only carries a prefix for long text columns, so the
+ * full value is fetched on demand; on failure the prefix is returned and the error is shown.
+ */
+export const readCellValue = async (value: remote.MySqlValue, column: string, rowIndex: number, record: Record<string, remote.MySqlValue>): Promise<remote.MySqlValue> => {
+    const state = useTableStore.getState()
+    if (!state.truncatedColumns.includes(column)) { return value }
+    try {
+        return await state.readFullValue(rowIndex, column, record)
+    } catch (err) {
+        state.addErrorMessage(`Could not read the full value: ${err instanceof Error ? err.message : String(err)}\n`)
+        return value
+    }
+}
+
+/**
  * Opens the full value in an editor tab (VS Code) or a new browser tab (development server).
  * The snapshot is read-only: there is no way to write it back.
  */
-export const openValueSnapshot = (value: remote.MySqlValue, column: string, rowIndex: number) => {
+export const openValueSnapshot = async (value: remote.MySqlValue, column: string, rowIndex: number, record: Record<string, remote.MySqlValue>) => {
     const state = useTableStore.getState()
-    const text = cellText(value)
+    const text = cellText(await readCellValue(value, column, rowIndex, record))
     if (remote.isVSCode) {
         const row = `row ${state.paging.visibleAreaTop + BigInt(rowIndex) + 1n}`
         void remote.openCellInEditor(text, column, state.tableName, row).catch(console.error)
@@ -463,8 +509,18 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly re
     const visibleColumns = useTableStore((s) => s.visibleColumns)
     const selectedCell = useTableStore((s) => s.selectedCell)
 
-    const preview = () => {
-        const record = Object.fromEntries(columns.map(({ name }) => [name, props.record[name]]))
+    const preview = async () => {
+        const state = useTableStore.getState()
+        // A page only carries a prefix of long text columns, so the row snapshot reads them in full.
+        const record = Object.fromEntries(await Promise.all(columns.map(async ({ name }) => {
+            if (!state.truncatedColumns.includes(name)) { return [name, props.record[name] as remote.MySqlValue] }
+            try {
+                return [name, await state.readFullValue(props.row, name, props.record as Record<string, remote.MySqlValue>)]
+            } catch (err) {
+                state.addErrorMessage(`Could not read ${name}: ${err instanceof Error ? err.message : String(err)}\n`)
+                return [name, props.record[name] as remote.MySqlValue]
+            }
+        })))
         const content = JSON.stringify(record, (_key, value) => {
             if (typeof value === "bigint") { const number = Number(value); return Number.isSafeInteger(number) ? number : { type: "INTEGER", value: value.toString() } }
             if (value instanceof Uint8Array) { return { type: "BLOB", hex: blob2hex(value) } }
@@ -484,8 +540,8 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly re
         <td
             class="pl-[10px] pr-[10px] bg-[var(--gutter-color)] overflow-hidden sticky left-0 whitespace-nowrap text-right text-black select-none border-r-[1px] border-r-[var(--td-border-color)] clickable"
             role="button" tabIndex={0} aria-label={`Preview row ${props.rowNumber}`}
-            onClick={preview}
-            onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); preview() } }}
+            onClick={() => { void preview() }}
+            onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); void preview() } }}
             onContextMenu={(ev) => {
                 renderContextmenu(ev, <>
                     <button onClick={() => navigator.clipboard.writeText(props.rowNumber + "")}>Copy Row Number</button>
@@ -511,21 +567,20 @@ const TableRow = (props: { selected: boolean, onPreview: () => void, readonly re
                 aria-selected={isSelected}
                 data-cell-selected={isSelected ? "true" : undefined}
                 onMouseDown={select}
-                onDblClick={() => { openValueSnapshot(value, name, props.row) }}
+                onDblClick={() => { void openValueSnapshot(value, name, props.row, props.record) }}
                 onContextMenu={(ev) => {
                     renderContextmenu(ev, <>
-                        <button onClick={() => { openValueSnapshot(value, name, props.row) }}>Open Value in Editor</button>
+                        <button onClick={() => { void openValueSnapshot(value, name, props.row, props.record) }}>Open Value in Editor</button>
                         <hr />
-                        <button onClick={() => {
-                            if (value instanceof Uint8Array) {  // BLOB
-                                navigator.clipboard.writeText(blob2hex(value)).catch(console.error)
-                            } else if (value === null) {  // NULL
-                                navigator.clipboard.writeText("NULL").catch(console.error)
-                            } else {
-                                navigator.clipboard.writeText("" + value).catch(console.error)
-                            }
+                        <button onClick={async () => {
+                            // Copying always takes the whole value, not the page prefix.
+                            const full = await readCellValue(value, name, props.row, props.record)
+                            navigator.clipboard.writeText(cellText(full)).catch(console.error)
                         }}>Copy Text</button>
-                        <button onClick={() => navigator.clipboard.writeText(JSON.stringify(value))}>Copy JSON</button>
+                        <button onClick={async () => {
+                            const full = await readCellValue(value, name, props.row, props.record)
+                            navigator.clipboard.writeText(JSON.stringify(full)).catch(console.error)
+                        }}>Copy JSON</button>
                     </>)
                 }}
                 data-testid={`cell ${props.rowNumber - 1n}, ${i}`}>

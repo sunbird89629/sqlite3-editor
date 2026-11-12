@@ -60,10 +60,10 @@ export const onKeydown = async (ev: KeyboardEvent) => {
         if (key("Enter") || key("F2")) {
             // Enter and F2 open the full value in an editor tab; the viewer never edits in place.
             const viewer = useTableStore.getState()
-            const value = viewer.records[selection.row]?.[selection.column]
-            if (value !== undefined || selection.column in (viewer.records[selection.row] ?? {})) {
+            const record = viewer.records[selection.row] ?? {}
+            if (selection.column in record) {
                 ev.preventDefault()
-                openValueSnapshot(value ?? null, selection.column, selection.row)
+                void openValueSnapshot(record[selection.column] ?? null, selection.column, selection.row, record)
             }
             return
         }

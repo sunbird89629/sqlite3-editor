@@ -65,6 +65,36 @@ export const rowKeyColumn = (columns: readonly ColumnInfo[]): string | null => {
     return primary.length === 1 ? primary[0]!.name : null
 }
 
+/**
+ * Long text and JSON columns are read as a prefix only. A page of 10 rows of `longtext` can easily
+ * weigh megabytes, which dominates the query time; the full value is fetched when the user asks for it.
+ */
+export const PREVIEW_CHARS = 1024
+export type Previewable = { name: string, type: string }
+export const isPreviewed = (column: Previewable) => /text|json/i.test(column.type)
+
+/** `LEFT(col, PREVIEW_CHARS) AS col`, or the plain column when it is small enough to read whole. */
+export const selectExpression = (column: Previewable): string =>
+    isPreviewed(column) ? `LEFT(${escapeIdentifier(column.name)}, ${PREVIEW_CHARS}) AS ${escapeIdentifier(column.name)}` : escapeIdentifier(column.name)
+
+/** Reads one full value for the snapshot, addressed by the row key when there is one. */
+export const fullValueSQL = (opts: {
+    subquery: string
+    column: string
+    filterSQL: string
+    order: string
+    rowKey: string | null
+}): string => {
+    const column = `${escapeIdentifier(opts.column)} AS value`
+    if (opts.rowKey !== null) {
+        const conditions = opts.filterSQL === "" ? `${escapeIdentifier(opts.rowKey)} = ?` : `${opts.filterSQL} AND ${escapeIdentifier(opts.rowKey)} = ?`
+        return `SELECT ${column} FROM ${opts.subquery} WHERE ${conditions} LIMIT 1`
+    }
+    // No row key: the page query itself is reproduced with an absolute offset.
+    const where = opts.filterSQL === "" ? "" : ` WHERE ${opts.filterSQL}`
+    return `SELECT ${column} FROM ${opts.subquery}${where}${opts.order} LIMIT 1 OFFSET ?`
+}
+
 /** Escapes a filter term for `LIKE`, where backslash is the default escape character. */
 const escapeLike = (term: string) => term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")
 

@@ -5,7 +5,9 @@ filter them, and runs read-only SQL. Nothing in this extension writes to the dat
 
 ## What it does
 
-- Browse the tables and views of one database, 10 records per page.
+- Browse the tables and views of one database, 10 records per page. Long text and JSON columns are
+  read as a 1024-character prefix, so a page stays small; the whole value is fetched when you open
+  a cell or a row snapshot.
 - Sort by any column and filter across all columns. The database does the work, so both apply to the
   whole result and not only to the visible page.
 - Inspect a table: its columns, its indexes and its `CREATE TABLE` statement.
