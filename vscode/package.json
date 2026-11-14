@@ -1,7 +1,7 @@
 {
   "name": "vscode-sqlite3-editor",
   "displayName": "MySQL Viewer",
-  "version": "4.0.14",
+  "version": "4.0.15",
   "description": "Browse MySQL databases read-only, like a spreadsheet.",
   "main": "extension.js",
   "publisher": "yy0931",
@@ -15,7 +15,7 @@
   "scripts": {
     "build": "pwsh ./build-dev.ps1 || ./build-dev.sh",
     "vscode:prepublish": "npm run build:prod",
-    "test": "mkdir -p .tmp && npx esbuild mysql-guard.ts --bundle --platform=node --format=cjs --outfile=.tmp/mysql-guard.cjs && npx esbuild mysql-client.ts --bundle --platform=node --format=cjs --external:mysql2 --outfile=.tmp/mysql-client.cjs && npx esbuild sql-completion-core.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-completion-core.cjs && npx esbuild sql-statements.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-statements.cjs && npx esbuild results-tabs.ts --bundle --platform=node --format=cjs --outfile=.tmp/results-tabs.cjs && npx esbuild sql-params.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-params.cjs && node mysql-guard-test.cjs && node mysql-client-test.cjs && node sql-completion-test.cjs && node sql-statements-test.cjs && node results-tabs-test.cjs && node sql-params-test.cjs",
+    "test": "mkdir -p .tmp && npx esbuild mysql-guard.ts --bundle --platform=node --format=cjs --outfile=.tmp/mysql-guard.cjs && npx esbuild mysql-client.ts --bundle --platform=node --format=cjs --external:mysql2 --outfile=.tmp/mysql-client.cjs && npx esbuild sql-completion-core.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-completion-core.cjs && npx esbuild sql-statements.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-statements.cjs && npx esbuild results-tabs.ts --bundle --platform=node --format=cjs --outfile=.tmp/results-tabs.cjs && npx esbuild sql-params.ts --bundle --platform=node --format=cjs --outfile=.tmp/sql-params.cjs && node mysql-guard-test.cjs && node mysql-client-test.cjs && node sql-completion-test.cjs && node sql-statements-test.cjs && node results-tabs-test.cjs && node sql-params-test.cjs && node build-extension.cjs && node lens-run-test.cjs",
     "build:prod": "pwsh ./build.ps1 || ./build.sh"
   },
   "engines": {

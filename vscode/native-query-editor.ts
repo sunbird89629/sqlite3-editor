@@ -12,10 +12,20 @@ const RESULT_ROW_LIMIT = 500
 /** A query document is associated only with a session the user has explicitly opened. */
 export function registerQueryEditor(context: vscode.ExtensionContext, options: { openSnapshot: (content: string, name: string) => void }) {
     const clients = new Map<string, MySqlClient>()
+
+    // A click that produces nothing is impossible to diagnose from the UI, so every step of a run
+    // is written to the "MySQL Viewer" output channel.
+    const output = vscode.window.createOutputChannel("MySQL Viewer")
+    context.subscriptions.push(output, {
+        dispose: () => output.dispose(),
+    })
+    const log = (message: string) => output.appendLine(`[${new Date().toISOString()}] ${message}`)
+
     const results = createResultsController(context, {
         extensionUri: context.extensionUri,
         openSnapshot: options.openSnapshot,
         rerun: (session, plan) => executeStatement(session, plan.sql, plan.params as ParamValue[], { addTab: false }),
+        log,
     })
 
     const database = sessionOf
@@ -33,6 +43,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
      * or a `:name` without a block is reported instead of being sent to the server.
      */
     const prepare = (sql: string, block: string | null): BindResult => {
+        log(`prepare: block=${block === null ? "none" : JSON.stringify(block).slice(0, 200)} sql=${JSON.stringify(sql).slice(0, 200)}`)
         if (block === null) {
             const names = [...new Set(placeholderNames(sql))]
             return names.length === 0 ? { sql, params: [] } : {
@@ -46,14 +57,17 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
 
     /** Runs one statement against an open session; a statement with rows lands in a results tab. */
     const executeStatement = async (db: string, sql: string, params: readonly ParamValue[] = [], options: { addTab?: boolean } = {}): Promise<ResultTabData | undefined> => {
+        log(`execute: session=${db} params=${params.length} addTab=${options.addTab !== false} sql=${JSON.stringify(sql).slice(0, 200)}`)
         const client = clients.get(db)
         if (!client) {
+            log(`execute: no open client for ${db} (open sessions: ${[...clients.keys()].join(", ") || "none"})`)
             void vscode.window.showErrorMessage("Open the MySQL connection in MySQL Viewer before running this query.")
             return undefined
         }
         const started = Date.now()
         try {
             const result = await client.query(sql, [...params])
+            log(`execute: rows=${result.records?.length ?? 0} columns=${result.columns?.length ?? 0}`)
             if (!result.columns || !result.records) {
                 void vscode.window.showInformationMessage("SQL statement executed.")
                 return undefined
@@ -66,9 +80,14 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
                 total: result.records.length,
                 durationMs: Date.now() - started,
             }
-            if (options.addTab !== false) { await results.show(db, data, { sql, params: [...params] }) }
+            if (options.addTab !== false) {
+                log(`execute: showing the result panel for ${db}`)
+                await results.show(db, data, { sql, params: [...params] })
+                log("execute: result panel updated")
+            }
             return data
         } catch (err) {
+            log(`execute: failed ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
             void vscode.window.showErrorMessage(`SQL query failed: ${err instanceof Error ? err.message : String(err)}`)
             return undefined
         }
@@ -99,15 +118,21 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
 
     context.subscriptions.push(
         vscode.commands.registerCommand("sqlite3-editor.runQuery", run),
-        vscode.commands.registerCommand("sqlite3-editor.runStatement", (db: unknown, sql: unknown, block: unknown) => {
+        vscode.commands.registerCommand("sqlite3-editor.runStatement", async (db: unknown, sql: unknown, block: unknown) => {
+            log(`runStatement: session=${String(db)} block=${block === null ? "null" : typeof block} sql=${typeof sql === "string" ? JSON.stringify(sql).slice(0, 200) : typeof sql}`)
             if (typeof db !== "string" || typeof sql !== "string" || sql.trim() === "") {
                 // Never fail silently: a click with no visible reaction is indistinguishable from a bug.
                 void vscode.window.showWarningMessage("Run needs a session and a statement. Open the document with SQL Editor first.")
                 return
             }
             const prepared = prepare(sql, typeof block === "string" ? block : null)
-            if ("error" in prepared) { void vscode.window.showErrorMessage(prepared.error); return }
-            return executeStatement(db, prepared.sql, prepared.params)
+            if ("error" in prepared) { log(`runStatement: rejected: ${prepared.error}`); void vscode.window.showErrorMessage(prepared.error); return }
+            try {
+                await executeStatement(db, prepared.sql, prepared.params)
+            } catch (err) {
+                log(`runStatement: unexpected ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
+                void vscode.window.showErrorMessage(`Run failed: ${err instanceof Error ? err.message : String(err)}`)
+            }
         }),
         registerSqlLens((session) => clients.has(session), lensChanged.event),
     )

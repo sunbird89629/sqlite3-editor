@@ -23,6 +23,7 @@ results-tabs.ts
 results-tabs-test.cjs
 sql-params.ts
 sql-params-test.cjs
+lens-run-test.cjs
 native-query-editor.ts
 tsconfig.json
 **/.gitignore

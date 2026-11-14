@@ -20,6 +20,8 @@ type Deps = {
     openSnapshot: (content: string, name: string) => void
     /** Runs a statement again for Re-run; `undefined` means it failed and the panel keeps its rows. */
     rerun: (session: string, plan: RerunPlan) => Promise<ResultTabData | undefined>
+    /** Diagnostic sink, shared with the editor's output channel. */
+    log?: (message: string) => void
 }
 
 type State = {
@@ -38,6 +40,7 @@ const MESSAGE = "sqlite3-editor-results"
  * lives in the editor column beside the SQL document instead of inside the database viewer.
  */
 export const createResultsController = (context: vscode.ExtensionContext, deps: Deps): ResultsController => {
+    const log = (message: string) => deps.log?.(`results: ${message}`)
     const states = new Map<string, State>()
     /** How to re-run each tab; kept here so the webview payload stays display-only. */
     const plans = new Map<string, RerunPlan>()
@@ -51,7 +54,8 @@ export const createResultsController = (context: vscode.ExtensionContext, deps: 
 
     const ensure = async (session: string): Promise<State> => {
         const existing = states.get(session)
-        if (existing !== undefined) { existing.panel.reveal(undefined, true); return existing }
+        if (existing !== undefined) { log(`reusing the panel for ${session}`); existing.panel.reveal(undefined, true); return existing }
+        log(`creating the panel for ${session}`)
 
         const panel = vscode.window.createWebviewPanel("sqlite3-editor.results", `Results · ${session}`, vscode.ViewColumn.Beside, {
             enableScripts: true,
@@ -60,7 +64,12 @@ export const createResultsController = (context: vscode.ExtensionContext, deps: 
         })
         const state: State = { session, panel, tabs: [], activeId: undefined, error: "", nextId: 0 }
         states.set(session, state)
-        panel.webview.html = await html(panel.webview)
+        try {
+            panel.webview.html = await html(panel.webview)
+        } catch (err) {
+            log(`could not load results.html: ${err instanceof Error ? err.message : String(err)}`)
+            throw err
+        }
         panel.onDidDispose(() => { if (states.get(session) === state) { states.delete(session) } })
         context.subscriptions.push(panel.webview.onDidReceiveMessage(async (message: unknown) => {
             const request = message as { type?: string, command?: string, id?: string, value?: string, column?: number }
@@ -87,6 +96,7 @@ export const createResultsController = (context: vscode.ExtensionContext, deps: 
                 deps.openSnapshot(request.value, `cell · ${session}`)
             }
         }))
+        log(`panel ready for ${session}`)
         return state
     }
 
