@@ -91,7 +91,7 @@ MySQL 会话 SHALL 拒绝数据修改与结构修改语句（`INSERT`、`UPDATE`
 
 ### Requirement: SQL 编辑器在只读会话中的行为
 
-会话关联的 SQL 文档 SHALL 能通过 MySQL 会话执行语句并显示结果。该文档 SHALL 提供补全：候选 SHALL 包含语句中 `FROM`/`JOIN`/`UPDATE`/`INTO` 引用的表的列、当前数据库的表名与 MySQL 关键字，且列与表 SHALL 排在关键字之前。补全数据 SHALL 来自当前会话的 `information_schema`。该文档 SHALL NOT 提供 code lens 与语法诊断。
+会话关联的 SQL 文档 SHALL 能通过 MySQL 会话执行语句并显示结果。该文档 SHALL 提供补全：候选 SHALL 包含语句中 `FROM`/`JOIN`/`UPDATE`/`INTO` 引用的表的列、当前数据库的表名、MySQL 内置函数名（如 `JSON_UNQUOTE`、`DATE_FORMAT`）与关键字，且列、表与函数 SHALL 排在关键字之前。列与表 SHALL 来自当前会话的 `information_schema`。该文档 SHALL NOT 提供 code lens 与语法诊断。
 
 #### Scenario: 在 SQL 编辑器中执行
 - **WHEN** 用户在 MySQL 会话的 SQL 文档中执行 `SELECT * FROM t`
@@ -101,9 +101,13 @@ MySQL 会话 SHALL 拒绝数据修改与结构修改语句（`INSERT`、`UPDATE`
 - **WHEN** 用户在 `SELECT * FROM orders WHERE ` 后输入 `st`
 - **THEN** 列表以 `orders` 的列 `status` 开头，随后是与该前缀匹配的关键字
 
+#### Scenario: 函数补全
+- **WHEN** 用户在 `SELECT ` 后输入 `json_unq`
+- **THEN** 列表出现 `JSON_UNQUOTE`，标记为函数
+
 #### Scenario: 元数据不可用
 - **WHEN** 会话已断开，用户仍然请求补全
-- **THEN** 列表只包含关键字，不报错、不阻塞输入
+- **THEN** 列表只包含函数与关键字，不报错、不阻塞输入
 
 #### Scenario: 写语句仍被拒绝
 - **WHEN** 用户在 SQL 文档中执行 `UPDATE t SET a = 1`

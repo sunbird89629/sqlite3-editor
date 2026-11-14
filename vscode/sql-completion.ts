@@ -11,6 +11,7 @@ const sessionOf = (doc: vscode.TextDocument) => /^-- database: (.+)$/.exec(doc.l
 const KIND: Record<Suggestion["kind"], vscode.CompletionItemKind> = {
     column: vscode.CompletionItemKind.Field,
     table: vscode.CompletionItemKind.Class,
+    function: vscode.CompletionItemKind.Function,
     keyword: vscode.CompletionItemKind.Keyword,
 }
 
@@ -67,7 +68,10 @@ export const registerSqlCompletion = (context: vscode.ExtensionContext, getClien
                 const range = word ?? new vscode.Range(position, position)
                 const items = suggest({ sql: doc.getText(), prefix, tables }).map((suggestion) => {
                     const item = new vscode.CompletionItem(suggestion.label, KIND[suggestion.kind])
-                    item.detail = suggestion.kind === "column" ? `${suggestion.detail} column` : suggestion.kind === "table" ? "table or view" : "MySQL keyword"
+                    item.detail = suggestion.kind === "column" ? `${suggestion.detail} column`
+                        : suggestion.kind === "table" ? "table or view"
+                            : suggestion.kind === "function" ? "MySQL function"
+                                : "MySQL keyword"
                     item.range = range
                     return item
                 })
