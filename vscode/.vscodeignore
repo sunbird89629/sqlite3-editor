@@ -21,6 +21,8 @@ sql-statements-test.cjs
 results-panel.ts
 results-tabs.ts
 results-tabs-test.cjs
+sql-params.ts
+sql-params-test.cjs
 native-query-editor.ts
 tsconfig.json
 **/.gitignore

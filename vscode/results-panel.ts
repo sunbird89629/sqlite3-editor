@@ -2,11 +2,14 @@ import vscode from "vscode"
 import { addTab, closeTab, replaceTab } from "./results-tabs"
 import type { ResultTab, ResultTabData } from "./results-tabs"
 
+/** What Re-run needs: the statement as written plus its bound parameter values. */
+export type RerunPlan = { sql: string, params: unknown[] }
+
 export type ResultsController = {
     /** Adds a result tab (evicting the oldest beyond five) and reveals the panel beside the editor. */
-    show: (session: string, data: ResultTabData) => Promise<void>
+    show: (session: string, data: ResultTabData, plan?: RerunPlan) => Promise<void>
     /** Replaces the data of an existing tab; used by Re-run and by Execute again. */
-    update: (session: string, id: string, data: ResultTabData) => Promise<void>
+    update: (session: string, id: string, data: ResultTabData, plan?: RerunPlan) => Promise<void>
     /** Closes the panel of a session, e.g. when the connection is closed. */
     dispose: (session: string) => void
 }
@@ -16,7 +19,7 @@ type Deps = {
     /** Opens a read-only snapshot of a truncated cell value in an editor tab. */
     openSnapshot: (content: string, name: string) => void
     /** Runs a statement again for Re-run; `undefined` means it failed and the panel keeps its rows. */
-    rerun: (session: string, sql: string) => Promise<ResultTabData | undefined>
+    rerun: (session: string, plan: RerunPlan) => Promise<ResultTabData | undefined>
 }
 
 type State = {
@@ -36,6 +39,8 @@ const MESSAGE = "sqlite3-editor-results"
  */
 export const createResultsController = (context: vscode.ExtensionContext, deps: Deps): ResultsController => {
     const states = new Map<string, State>()
+    /** How to re-run each tab; kept here so the webview payload stays display-only. */
+    const plans = new Map<string, RerunPlan>()
 
     const post = (state: State) => {
         void state.panel.webview.postMessage({ type: MESSAGE, tabs: state.tabs, activeId: state.activeId, session: state.session, error: state.error })
@@ -69,8 +74,9 @@ export const createResultsController = (context: vscode.ExtensionContext, deps: 
             }
             if (request.command === "rerun" && typeof request.id === "string") {
                 const tab = state.tabs.find((candidate) => candidate.id === request.id)
-                if (tab === undefined) { return }
-                const data = await deps.rerun(session, tab.sql)
+                const plan = plans.get(request.id)
+                if (tab === undefined || plan === undefined) { return }
+                const data = await deps.rerun(session, plan)
                 if (data === undefined) { state.error = "Re-run failed; the previous rows are still shown."; post(state); return }
                 state.error = ""
                 state.tabs = replaceTab(state.tabs, request.id, data)
@@ -85,19 +91,21 @@ export const createResultsController = (context: vscode.ExtensionContext, deps: 
     }
 
     return {
-        async show(session, data) {
+        async show(session, data, plan) {
             const state = await ensure(session)
             state.nextId += 1
             const id = `${session}#${state.nextId}`
+            if (plan !== undefined) { plans.set(id, plan) }
             state.tabs = addTab(state.tabs, { id, ...data })
             state.activeId = id
             state.error = ""
             state.panel.reveal(undefined, true)
             post(state)
         },
-        async update(session, id, data) {
+        async update(session, id, data, plan) {
             const state = states.get(session)
             if (state === undefined) { return }
+            if (plan !== undefined) { plans.set(id, plan) }
             state.tabs = replaceTab(state.tabs, id, data)
             state.error = ""
             post(state)

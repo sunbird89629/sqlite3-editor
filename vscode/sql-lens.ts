@@ -1,5 +1,6 @@
 import vscode from "vscode"
 import { splitStatements } from "./sql-statements"
+import { paramsBlockAt, parseParams } from "./sql-params"
 
 /** The session a query document belongs to, taken from its `-- database:` header. */
 export const sessionOf = (doc: vscode.TextDocument) => /^-- database: (.+)$/.exec(doc.lineAt(0).text)?.[1]
@@ -17,15 +18,19 @@ export const registerSqlLens = (
             provideCodeLenses(doc) {
                 const session = sessionOf(doc)
                 if (session === undefined || !isConnected(session)) { return [] }
-                return splitStatements(doc.getText()).map((statement) => new vscode.CodeLens(
-                    new vscode.Range(statement.line, 0, statement.line, 0),
-                    {
-                        title: "▶ Run",
-                        tooltip: "Run this statement (Ctrl+Enter runs the selection or the whole document)",
+                const lines = doc.getText().split(/\r?\n/)
+                return splitStatements(doc.getText()).map((statement) => {
+                    const block = paramsBlockAt(lines, statement.line)
+                    const count = block === null ? 0 : parseParams(block).values.size
+                    return new vscode.CodeLens(new vscode.Range(statement.line, 0, statement.line, 0), {
+                        title: count === 0 ? "▶ Run" : `▶ Run (${count} param${count === 1 ? "" : "s"})`,
+                        tooltip: count === 0
+                            ? "Run this statement (Ctrl+Enter runs the selection or the whole document)"
+                            : `Run this statement with the ${count} value(s) from its -- params: line`,
                         command: "sqlite3-editor.runStatement",
-                        arguments: [session, statement.sql],
-                    },
-                ))
+                        arguments: [session, statement.sql, block],
+                    })
+                })
         },
     })
 }

@@ -2,6 +2,9 @@ import vscode from "vscode"
 import type { MySqlClient } from "./mysql-client"
 import { registerSqlLens, sessionOf } from "./sql-lens"
 import { createResultsController } from "./results-panel"
+import { bindParams, paramsBlockAt, parseParams, placeholderNames } from "./sql-params"
+import type { BindResult, ParamValue } from "./sql-params"
+import { splitStatements } from "./sql-statements"
 import type { ResultTabData } from "./results-tabs"
 
 const RESULT_ROW_LIMIT = 500
@@ -12,7 +15,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
     const results = createResultsController(context, {
         extensionUri: context.extensionUri,
         openSnapshot: options.openSnapshot,
-        rerun: (session, sql) => executeStatement(session, sql, { addTab: false }),
+        rerun: (session, plan) => executeStatement(session, plan.sql, plan.params as ParamValue[], { addTab: false }),
     })
 
     const database = sessionOf
@@ -25,8 +28,24 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
             ? `BLOB (${value.length} bytes)`
             : String(value ?? "")
 
+    /**
+     * Applies the `-- params:` block of a statement. A placeholder without a value, an unused value
+     * or a `:name` without a block is reported instead of being sent to the server.
+     */
+    const prepare = (sql: string, block: string | null): BindResult => {
+        if (block === null) {
+            const names = [...new Set(placeholderNames(sql))]
+            return names.length === 0 ? { sql, params: [] } : {
+                error: `The statement uses ${names.map((name) => `:${name}`).join(", ")}, but there is no -- params: line above it. Add e.g. -- params: ${names[0]} = 'value'.`,
+            }
+        }
+        const parsed = parseParams(block)
+        if (parsed.errors.length > 0) { return { error: parsed.errors.join("\n") } }
+        return bindParams(sql, parsed.values)
+    }
+
     /** Runs one statement against an open session; a statement with rows lands in a results tab. */
-    const executeStatement = async (db: string, sql: string, options: { addTab?: boolean } = {}): Promise<ResultTabData | undefined> => {
+    const executeStatement = async (db: string, sql: string, params: readonly ParamValue[] = [], options: { addTab?: boolean } = {}): Promise<ResultTabData | undefined> => {
         const client = clients.get(db)
         if (!client) {
             void vscode.window.showErrorMessage("Open the MySQL connection in MySQL Viewer before running this query.")
@@ -34,7 +53,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
         }
         const started = Date.now()
         try {
-            const result = await client.query(sql, [])
+            const result = await client.query(sql, [...params])
             if (!result.columns || !result.records) {
                 void vscode.window.showInformationMessage("SQL statement executed.")
                 return undefined
@@ -47,7 +66,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
                 total: result.records.length,
                 durationMs: Date.now() - started,
             }
-            if (options.addTab !== false) { await results.show(db, data) }
+            if (options.addTab !== false) { await results.show(db, data, { sql, params: [...params] }) }
             return data
         } catch (err) {
             void vscode.window.showErrorMessage(`SQL query failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -65,14 +84,26 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
         const selection = editor.selection.isEmpty ? doc.getText().split(/\r?\n/).slice(1).join("\n") : doc.getText(editor.selection)
         const sql = selection.trim()
         if (sql === "") { vscode.window.showWarningMessage("The document does not contain a statement."); return }
-        await executeStatement(db, sql)
+        // Without a selection, use the statement around the caret so its -- params: line applies.
+        const lines = doc.getText().split(/\r?\n/)
+        const statement = editor.selection.isEmpty
+            ? [...splitStatements(doc.getText())].reverse().find((candidate) => candidate.line <= editor.selection.active.line)
+            : undefined
+        const block = editor.selection.isEmpty
+            ? paramsBlockAt(lines, statement?.line ?? editor.selection.active.line)
+            : paramsBlockAt(lines, editor.selection.start.line)
+        const prepared = prepare(editor.selection.isEmpty && statement ? statement.sql : sql, block)
+        if ("error" in prepared) { void vscode.window.showErrorMessage(prepared.error); return }
+        await executeStatement(db, prepared.sql, prepared.params)
     }
 
     context.subscriptions.push(
         vscode.commands.registerCommand("sqlite3-editor.runQuery", run),
-        vscode.commands.registerCommand("sqlite3-editor.runStatement", (db: unknown, sql: unknown) => {
+        vscode.commands.registerCommand("sqlite3-editor.runStatement", (db: unknown, sql: unknown, block: unknown) => {
             if (typeof db !== "string" || typeof sql !== "string" || sql.trim() === "") { return }
-            return executeStatement(db, sql)
+            const prepared = prepare(sql, typeof block === "string" ? block : null)
+            if ("error" in prepared) { void vscode.window.showErrorMessage(prepared.error); return }
+            return executeStatement(db, prepared.sql, prepared.params)
         }),
         registerSqlLens((session) => clients.has(session), lensChanged.event),
     )

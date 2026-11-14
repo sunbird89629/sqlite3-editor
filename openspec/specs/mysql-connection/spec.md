@@ -125,6 +125,30 @@ MySQL 会话 SHALL 拒绝数据修改与结构修改语句（`INSERT`、`UPDATE`
 - **WHEN** 用户选中一段语句并按 Ctrl+Enter
 - **THEN** 只执行选中的部分，结果照常显示
 
+### Requirement: SQL 文档中的命名参数
+
+SQL 文档 SHALL 支持用紧邻语句上方的 `-- params:` 行声明命名参数，并把语句中的 `:name` 绑定为 MySQL 的位置参数；SHALL NOT 把 `:name` 原样发送到服务器。注释与字符串字面量里的 `:name` SHALL NOT 被替换。占位符缺值、声明了未使用的参数、或存在 `:name` 却没有 `-- params:` 行时，系统 SHALL 在发送前报错。`Run` 操作 SHALL 标明该语句的参数个数。
+
+#### Scenario: 绑定命名参数
+- **WHEN** 语句上方有 `-- params: run_id = 'run_9d18'`，语句为 `SELECT * FROM runs WHERE id = :run_id`
+- **THEN** 实际执行的是 `SELECT * FROM runs WHERE id = ?`，值 `run_9d18` 作为参数绑定，不再出现语法错误
+
+#### Scenario: 重复占位符
+- **WHEN** 同一 `:name` 在语句中出现两次
+- **THEN** 两次都替换为 `?`，该值按位置绑定两次
+
+#### Scenario: 缺值
+- **WHEN** 语句使用 `:cid`，但 `-- params:` 行没有 `cid`
+- **THEN** 提示缺少取值，不发送语句
+
+#### Scenario: 没有 params 行
+- **WHEN** 语句含有 `:name` 且上方没有 `-- params:` 行
+- **THEN** 提示先补 `-- params:` 行，不发送语句
+
+#### Scenario: 参数个数
+- **WHEN** 语句声明了两个参数
+- **THEN** 该语句上方的 `Run` 操作显示 `(2 params)`
+
 ### Requirement: 关闭会话
 
 关闭面板时，扩展 SHALL 结束该会话的数据库连接，并 SHALL NOT 在后台保留连接。再次打开同一连接 SHALL 建立新的连接。
