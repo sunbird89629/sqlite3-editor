@@ -47,9 +47,21 @@ body {
 .tab .close-danger:hover { color: var(--vscode-errorForeground, #b31d28); }
 .tabstrip .count { @apply my-auto px-1; color: var(--vscode-descriptionForeground, #6b7278); font-size: 11px; white-space: nowrap; }
 
-.result { @apply flex-1 flex flex-col min-h-0; }
-.head { @apply flex items-center gap-2.5 flex-wrap px-3 py-2; border-bottom: 1px solid var(--td-border-color); background: var(--vscode-editorWidget-background, #fafbfb); flex: none; }
-.head .sql { @apply overflow-hidden text-ellipsis whitespace-nowrap max-w-[46%]; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+/* The statement grows the head; the table keeps a usable height and scrolls itself. Only when the
+   statement alone is taller than the panel does the panel scroll, so no part of it is ever clipped. */
+.result { @apply flex-1 flex flex-col min-h-0; overflow: auto; }
+.head { @apply flex flex-col gap-1.5 px-3 py-2; border-bottom: 1px solid var(--td-border-color); background: var(--vscode-editorWidget-background, #fafbfb); flex: none; }
+.sql-row { display: flex; align-items: flex-start; gap: 10px; }
+/* Wrap and grow: the statement is never clipped and never scrolls on its own. */
+.head .sql {
+    flex: 1; min-width: 0; margin: 0;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    max-height: none; overflow: visible;
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.45;
+    user-select: text;
+}
+.copy-sql { flex: none; }
+.meta-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .head .stats { color: var(--vscode-descriptionForeground, #6b7278); font-size: 11.5px; }
 .head .actions { @apply ml-auto flex gap-1.5; }
 .btn {
@@ -59,7 +71,7 @@ body {
 .btn:hover { background: var(--vscode-list-hoverBackground, #eef2f4); }
 .btn[disabled] { opacity: .5; cursor: default; }
 
-.body { @apply flex-1 overflow-auto; }
+.body { @apply flex-1 overflow-auto; min-height: 120px; }
 table { @apply w-full; border-collapse: collapse; font-size: 12px; }
 th, td { @apply text-left overflow-hidden text-ellipsis whitespace-nowrap; padding: 5px 10px; border-bottom: 1px solid var(--td-border-color); border-right: 1px solid var(--td-border-color); max-width: 420px; }
 th { position: sticky; top: 0; background: var(--gutter-color); font-weight: 600; }

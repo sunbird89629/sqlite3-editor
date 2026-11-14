@@ -36,9 +36,10 @@ const App = () => {
 
     const active = tabs.find((tab) => tab.id === activeId) ?? tabs[tabs.length - 1]
 
-    const copy = (format: "csv" | "json") => {
+    const copy = (format: "csv" | "json" | "sql") => {
         if (!active) { return }
         const cell = (value: string) => `"${value.replaceAll('"', '""')}"`
+        if (format === "sql") { void navigator.clipboard.writeText(active.sql.trim()); return }
         const text = format === "csv"
             ? [active.columns.map(cell).join(","), ...active.rows.map((row) => row.map(cell).join(","))].join("\n")
             : JSON.stringify(active.rows.map((row) => Object.fromEntries(active.columns.map((column, index) => [column, row[index] ?? null]))), null, 2)
@@ -72,13 +73,19 @@ const App = () => {
             </div>
             : <div class="result">
                 <div class="head">
-                    <span class="sql" title={active.sql}>{active.summary ?? active.sql.replace(/\s+/g, " ").trim()}</span>
-                    <span class="stats">{active.running ? "running…" : `${active.total} ${active.total === 1 ? "row" : "rows"} · ${Math.round(active.durationMs)} ms`}{session !== "" ? ` · ${session}` : ""}</span>
-                    <span class="actions">
-                        <button class="btn" onClick={() => copy("csv")}>Copy CSV</button>
-                        <button class="btn" onClick={() => copy("json")}>Copy JSON</button>
-                        <button class="btn" onClick={() => post({ command: "rerun", id: active.id })}>Re-run</button>
-                    </span>
+                    {/* The whole statement, wrapped: no clipping and no inner scrolling. */}
+                    <div class="sql-row">
+                        <pre class="sql" data-testid="result-sql">{active.sql.trim()}</pre>
+                        <button class="btn copy-sql" onClick={() => copy("sql")} title="Copy this statement">Copy SQL</button>
+                    </div>
+                    <div class="meta-row">
+                        <span class="stats">{active.running ? "running…" : `${active.total} ${active.total === 1 ? "row" : "rows"} · ${Math.round(active.durationMs)} ms`}{session !== "" ? ` · ${session}` : ""}</span>
+                        <span class="actions">
+                            <button class="btn" onClick={() => copy("csv")} disabled={active.rows.length === 0}>Copy CSV</button>
+                            <button class="btn" onClick={() => copy("json")} disabled={active.rows.length === 0}>Copy JSON</button>
+                            <button class="btn" onClick={() => post({ command: "rerun", id: active.id })}>Re-run</button>
+                        </span>
+                    </div>
                 </div>
                 {active.running
                     ? <div class="body running" data-testid="result-running">
