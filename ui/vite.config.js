@@ -17,6 +17,13 @@ export default defineConfig({
     ],
     build: {
         target: "esnext",
+        rollupOptions: {
+            // Two entries: the database viewer and the SQL result panel.
+            input: {
+                main: path.resolve(__dirname, "index.html"),
+                results: path.resolve(__dirname, "results.html"),
+            },
+        },
     },
     esbuild: {
         logOverride: { 'this-is-undefined-in-esm': 'silent' },

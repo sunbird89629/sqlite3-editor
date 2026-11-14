@@ -56,7 +56,6 @@ const LoadingIndicator = () => {
 /** The root element. */
 const App = () => {
     const [showQueryEditor, setShowQueryEditor] = useState(false)
-    const [queryResult, setQueryResult] = useState<{ columns: string[], rows: string[][], total: number } | null>(null)
     const errorMessage = useTableStore((s) => s.errorMessage)
     const tableList = useTableStore((s) => s.tableList)
     const setViewerQuery = useTableStore((s) => s.setViewerQuery)
@@ -67,14 +66,6 @@ const App = () => {
     const [viewerTab, setViewerTab] = useState<"data" | "schema" | "history">("data")
     const tableRef = useRef<HTMLDivElement>(null)
     const moreActionsRef = useRef<HTMLDetailsElement>(null)
-
-    useEffect(() => {
-        const listener = (event: MessageEvent) => {
-            if (event.data?.type === "sqlite3-editor-query-result") { setQueryResult(event.data) }
-        }
-        window.addEventListener("message", listener)
-        return () => window.removeEventListener("message", listener)
-    }, [])
 
     // Register keyboard shortcuts
     useEventListener("keydown", onKeydown)
@@ -305,25 +296,6 @@ const App = () => {
                     {sort !== null && <button type="button" class="viewer-clear-sort" onClick={() => { setSort(null).catch(console.error) }} data-testid="clear-sort">Clear sort ×</button>}
                 </div>
             </div>
-            {queryResult && <section class="native-query-result" data-testid="native-query-result">
-                <div class="native-query-head">
-                    <strong>Query result</strong>
-                    <span>{queryResult.total} row(s){queryResult.total > 500 ? " (first 500 shown)" : ""}</span>
-                    <span class="native-query-actions">
-                        <Button secondary onClick={() => {
-                            const cell = (value: string) => `"${value.replaceAll('"', '""')}"`
-                            const csv = [queryResult.columns.map(cell).join(","), ...queryResult.rows.map((row) => row.map(cell).join(","))].join("\n")
-                            navigator.clipboard.writeText(csv).catch(console.error)
-                        }}>Copy CSV</Button>
-                        <Button secondary onClick={() => {
-                            const records = queryResult.rows.map((row) => Object.fromEntries(queryResult.columns.map((column, i) => [column, row[i]])))
-                            navigator.clipboard.writeText(JSON.stringify(records, null, 2)).catch(console.error)
-                        }}>Copy JSON</Button>
-                        <Button secondary onClick={() => { setQueryResult(null) }}>Close</Button>
-                    </span>
-                </div>
-                <div class="native-query-body"><table><thead><tr>{queryResult.columns.map((column) => <th class="px-2">{column}</th>)}</tr></thead><tbody>{queryResult.rows.map((row) => <tr>{row.map((value) => <td class="px-2">{value}</td>)}</tr>)}</tbody></table></div>
-            </section>}
             {viewerTab !== "history" && <nav class="schema-tabs" aria-label="Table view">
                 <button type="button" class={viewerTab === "data" ? "active" : ""} aria-current={viewerTab === "data" ? "page" : undefined} onClick={() => setViewerTab("data")} data-testid="data-button">Data</button>
                 {!useCustomViewerQuery && <button type="button" class={viewerTab === "schema" ? "active" : ""} aria-current={viewerTab === "schema" ? "page" : undefined} onClick={() => setViewerTab("schema")} data-testid="schema-button">Schema</button>}

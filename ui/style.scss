@@ -304,15 +304,6 @@ dialog {
 
 
 
-/* Result of a query run from the native SQL editor. */
-.native-query-result { margin-top: 10px; border: 1px solid var(--td-border-color); border-radius: 4px; background: var(--vscode-editorWidget-background, transparent); }
-.native-query-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--td-border-color); }
-.native-query-head span:first-of-type { color: var(--vscode-descriptionForeground, #777); }
-.native-query-actions { margin-left: auto; display: flex; gap: 6px; }
-.native-query-body { max-height: 30vh; overflow: auto; }
-.native-query-body th, .native-query-body td { text-align: left; white-space: nowrap; }
-
-
 /* Column visibility picker: searchable list with bulk actions, anchored under `SELECT ... FROM`. */
 .column-picker { position: relative; display: inline-block; }
 .column-picker-trigger { padding: 0 6px; cursor: pointer; background: transparent; color: inherit; border: 0; border-bottom: 1px dashed var(--td-border-color-active); font: inherit; }

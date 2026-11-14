@@ -1,13 +1,19 @@
 import vscode from "vscode"
 import type { MySqlClient } from "./mysql-client"
 import { registerSqlLens, sessionOf } from "./sql-lens"
+import { createResultsController } from "./results-panel"
+import type { ResultTabData } from "./results-tabs"
 
 const RESULT_ROW_LIMIT = 500
 
 /** A query document is associated only with a session the user has explicitly opened. */
-export function registerQueryEditor(context: vscode.ExtensionContext) {
+export function registerQueryEditor(context: vscode.ExtensionContext, options: { openSnapshot: (content: string, name: string) => void }) {
     const clients = new Map<string, MySqlClient>()
-    const panels = new Map<string, Set<vscode.WebviewPanel>>()
+    const results = createResultsController(context, {
+        extensionUri: context.extensionUri,
+        openSnapshot: options.openSnapshot,
+        rerun: (session, sql) => executeStatement(session, sql, { addTab: false }),
+    })
 
     const database = sessionOf
     const lensChanged = new vscode.EventEmitter<void>()
@@ -19,21 +25,33 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
             ? `BLOB (${value.length} bytes)`
             : String(value ?? "")
 
-    /** Runs one statement against an open session and pushes the rows to that session's viewer. */
-    const executeStatement = async (db: string, sql: string) => {
+    /** Runs one statement against an open session; a statement with rows lands in a results tab. */
+    const executeStatement = async (db: string, sql: string, options: { addTab?: boolean } = {}): Promise<ResultTabData | undefined> => {
         const client = clients.get(db)
-        if (!client) { vscode.window.showErrorMessage("Open the MySQL connection in MySQL Viewer before running this query."); return }
+        if (!client) {
+            void vscode.window.showErrorMessage("Open the MySQL connection in MySQL Viewer before running this query.")
+            return undefined
+        }
+        const started = Date.now()
         try {
             const result = await client.query(sql, [])
-            if (!result.columns || !result.records) { vscode.window.showInformationMessage("SQL statement executed."); return }
-            const columns = result.columns
-            const rows = result.records.slice(0, RESULT_ROW_LIMIT).map((record) => columns.map((column) => display(record[column])))
-            for (const panel of panels.get(db) ?? []) {
-                void panel.webview.postMessage({ type: "sqlite3-editor-query-result", columns, rows, total: result.records.length })
+            if (!result.columns || !result.records) {
+                void vscode.window.showInformationMessage("SQL statement executed.")
+                return undefined
             }
-            vscode.window.showInformationMessage(`Query returned ${result.records.length} row(s)${result.records.length > RESULT_ROW_LIMIT ? `; first ${RESULT_ROW_LIMIT} shown` : ""}.`)
+            const columns = result.columns
+            const data: ResultTabData = {
+                sql,
+                columns,
+                rows: result.records.slice(0, RESULT_ROW_LIMIT).map((record) => columns.map((column) => display(record[column]))),
+                total: result.records.length,
+                durationMs: Date.now() - started,
+            }
+            if (options.addTab !== false) { await results.show(db, data) }
+            return data
         } catch (err) {
             void vscode.window.showErrorMessage(`SQL query failed: ${err instanceof Error ? err.message : String(err)}`)
+            return undefined
         }
     }
 
@@ -64,12 +82,8 @@ export function registerQueryEditor(context: vscode.ExtensionContext) {
         /** The session behind a `-- database:` header, used by the completion provider. */
         getClient(db: string): MySqlClient | undefined { return clients.get(db) },
         removeConnection(db: string, client: MySqlClient) { if (clients.get(db) === client) { clients.delete(db); lensChanged.fire() } },
-        addPanel(db: string, panel: vscode.WebviewPanel) {
-            const set = panels.get(db) ?? new Set<vscode.WebviewPanel>()
-            set.add(panel)
-            panels.set(db, set)
-            return () => { set.delete(panel); if (!set.size) { panels.delete(db) } }
-        },
+        /** Closes the results panel of a session when its connection goes away. */
+        disposeResults(db: string) { results.dispose(db) },
         async open(db: string, tableName?: string, prefill?: string) {
             if (/[\r\n]/.test(db)) { throw new Error("Session names containing line breaks cannot be used in query documents.") }
             const statement = tableName ? `SELECT * FROM \`${tableName.replaceAll("`", "``")}\`;` : "SELECT 1;"

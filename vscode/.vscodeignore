@@ -18,6 +18,9 @@ sql-completion-test.cjs
 sql-lens.ts
 sql-statements.ts
 sql-statements-test.cjs
+results-panel.ts
+results-tabs.ts
+results-tabs-test.cjs
 native-query-editor.ts
 tsconfig.json
 **/.gitignore

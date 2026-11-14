@@ -28,7 +28,21 @@ export const readConnections = (): MySqlConnectionConfig[] => {
 const connectionLabel = (config: MySqlConnectionConfig) => config.name || `${config.host}/${config.database}`
 
 export const activate = (context: vscode.ExtensionContext) => {
-    const queryEditor = registerQueryEditor(context)
+    /** Opens a read-only snapshot of a value in an editor tab; nothing is written back. */
+    const openSnapshot = (content: string, name: string) => {
+        const errors: ParseError[] = []
+        parse(content, errors, { disallowComments: true, allowTrailingComma: false })
+        const isJSON = content.trim().length > 0 && errors.length === 0
+        const text = isJSON ? applyEdits(content, format(content, undefined, { insertSpaces: true, tabSize: 2 })) : content
+        const file = name.replace(/[\\/\x00-\x1f:*?"<>|]/g, "_").slice(0, 160) || "value snapshot"
+        const uri = vscode.Uri.from({ scheme: "sqlite-editor-snapshot", path: `/${randomUUID()}/${file}.${isJSON ? "json" : "txt"}` })
+        snapshots.set(uri.toString(), text)
+        void vscode.workspace.openTextDocument(uri)
+            .then((doc) => vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true }))
+            .then(undefined, (err: Error) => { snapshots.delete(uri.toString()); void vscode.window.showErrorMessage(`Could not open the snapshot: ${err.message}`) })
+    }
+
+    const queryEditor = registerQueryEditor(context, { openSnapshot })
     registerSqlCompletion(context, (session) => queryEditor.getClient(session))
     const sessions = new Map<string, { client: MySqlClient, panel: vscode.WebviewPanel }>()
     const snapshots = new Map<string, string>()
@@ -62,12 +76,11 @@ export const activate = (context: vscode.ExtensionContext) => {
         })
         sessions.set(key, { client, panel })
         queryEditor.addConnection(key, client)
-        const removePanel = queryEditor.addPanel(key, panel)
         let messageListener: vscode.Disposable | undefined
         panel.onDidDispose(() => {
             messageListener?.dispose()
-            removePanel()
             queryEditor.removeConnection(key, client)
+            queryEditor.disposeResults(key)
             sessions.delete(key)
             void client.close()
         })
@@ -92,17 +105,8 @@ export const activate = (context: vscode.ExtensionContext) => {
                     // A read-only snapshot: the value is shown in an editor tab and never written back.
                     const { content, column, table, row } = unpackr.unpack(body) as { content: unknown, column: unknown, table?: string, row?: string }
                     if (typeof content !== "string" || typeof column !== "string") { res.status(400).send("Invalid cell content"); break }
-                    const errors: ParseError[] = []
-                    parse(content, errors, { disallowComments: true, allowTrailingComma: false })
-                    const isJSON = content.trim().length > 0 && errors.length === 0
-                    const text = isJSON ? applyEdits(content, format(content, undefined, { insertSpaces: true, tabSize: 2 })) : content
-                    const name = [table, row, column].filter(Boolean).join(" · ").replace(/[\\/\x00-\x1f:*?"<>|]/g, "_").slice(0, 160) || "value snapshot"
-                    const uri = vscode.Uri.from({ scheme: "sqlite-editor-snapshot", path: `/${randomUUID()}/${name}.${isJSON ? "json" : "txt"}` })
-                    snapshots.set(uri.toString(), text)
-                    vscode.workspace.openTextDocument(uri).then((doc) => vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true })).then(
-                        () => res.send(packr.pack(null)),
-                        (err) => { snapshots.delete(uri.toString()); res.status(400).send((err as Error).message) },
-                    )
+                    openSnapshot(content, [table, row, column].filter(Boolean).join(" · "))
+                    res.send(packr.pack(null))
                     break
                 } case "/session": {
                     // The webview has no other way to learn which database it is attached to.
