@@ -1,6 +1,6 @@
 // Run with `npm test` in vscode/: checks the named-parameter binding.
 const assert = require('assert')
-const { paramsBlockAt, parseParams, placeholderNames, bindParams } = require('./.tmp/sql-params.cjs')
+const { paramsBlockAt, parseParams, placeholderNames, bindParams, literalOf } = require('./.tmp/sql-params.cjs')
 
 const lines = [
     '-- database: local/evaluation',
@@ -29,6 +29,32 @@ assert.deepStrictEqual(bound.params, ['x', 'x', 10])
 // Literals and comments are untouched.
 const untouched = bindParams("SELECT ':nope', \"a\" FROM t -- :skip\nWHERE a = :a", new Map([['a', 1]]))
 assert.strictEqual(untouched.sql, "SELECT ':nope', \"a\" FROM t -- :skip\nWHERE a = ?")
+
+// The executed form is what the panel shows: comments gone, values inlined and quoted.
+{
+    const values = new Map([['run_id', "it's a \\ test"], ['limit', 10]])
+    const result = bindParams([
+        'SELECT',
+        '    -- sequence,',
+        '    -- kind,',
+        '    payload',
+        'FROM turn_events',
+        "WHERE id = :run_id -- trailing comment",
+        'LIMIT :limit',
+    ].join('\n'), values)
+    assert.strictEqual(result.display, [
+        'SELECT',
+        '    payload',
+        'FROM turn_events',
+        "WHERE id = 'it''s a \\\\ test'",
+        'LIMIT 10',
+    ].join('\n'))
+    assert.ok(!result.display.includes('sequence'))
+    assert.ok(!result.display.includes('trailing comment'))
+    assert.strictEqual(literalOf(null), 'NULL')
+    assert.strictEqual(literalOf(true), 'TRUE')
+    assert.strictEqual(literalOf(-1.5), '-1.5')
+}
 
 // Errors are explicit rather than sending a broken statement.
 assert.match(bindParams('SELECT :a', new Map()).error, /Missing a value for :a/)

@@ -3,7 +3,7 @@ import type { MySqlClient } from "./mysql-client"
 import { registerSqlLens, sessionOf } from "./sql-lens"
 import { createResultsController } from "./results-panel"
 import { statementSummary } from "./results-tabs"
-import { bindParams, paramsBlockAt, parseParams, placeholderNames } from "./sql-params"
+import { bindParams, paramsBlockAt, parseParams, placeholderNames, stripComments } from "./sql-params"
 import type { BindResult, ParamValue } from "./sql-params"
 import { splitStatements } from "./sql-statements"
 import type { ResultTabData } from "./results-tabs"
@@ -47,7 +47,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
         log(`prepare: block=${block === null ? "none" : JSON.stringify(block).slice(0, 200)} sql=${JSON.stringify(sql).slice(0, 200)}`)
         if (block === null) {
             const names = [...new Set(placeholderNames(sql))]
-            return names.length === 0 ? { sql, params: [] } : {
+            return names.length === 0 ? { sql, params: [], display: stripComments(sql) } : {
                 error: `The statement uses ${names.map((name) => `:${name}`).join(", ")}, but there is no -- params: line above it. Add e.g. -- params: ${names[0]} = 'value'.`,
             }
         }
@@ -57,7 +57,9 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
     }
 
     /** Runs one statement against an open session; a statement with rows lands in a results tab. */
-    const executeStatement = async (db: string, sql: string, params: readonly ParamValue[] = [], options: { addTab?: boolean } = {}): Promise<ResultTabData | undefined> => {
+    const executeStatement = async (db: string, sql: string, params: readonly ParamValue[] = [], options: { addTab?: boolean, display?: string } = {}): Promise<ResultTabData | undefined> => {
+        // The panel shows the statement as executed: comments removed, values inlined.
+        const executedSql = options.display ?? stripComments(sql)
         log(`execute: session=${db} params=${params.length} addTab=${options.addTab !== false} sql=${JSON.stringify(sql).slice(0, 200)}`)
         const client = clients.get(db)
         if (!client) {
@@ -67,7 +69,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
         }
         const started = Date.now()
         // A tab appears before the query runs, so a slow statement does not look like a dead click.
-        const tabId = options.addTab !== false ? await results.begin(db, sql) : undefined
+        const tabId = options.addTab !== false ? await results.begin(db, executedSql) : undefined
         if (tabId !== undefined) { log(`execute: running tab ${tabId}`) }
         try {
             const summary = sql.replace(/\s+/g, " ").trim().slice(0, 60)
@@ -83,8 +85,8 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
             }
             const columns = result.columns
             const data: ResultTabData = {
-                sql,
-                summary: statementSummary(sql),
+                sql: executedSql,
+                summary: statementSummary(executedSql),
                 columns,
                 rows: result.records.slice(0, RESULT_ROW_LIMIT).map((record) => columns.map((column) => display(record[column]))),
                 total: result.records.length,
@@ -125,7 +127,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
             : paramsBlockAt(lines, editor.selection.start.line)
         const prepared = prepare(editor.selection.isEmpty && statement ? statement.sql : sql, block)
         if ("error" in prepared) { void vscode.window.showErrorMessage(prepared.error); return }
-        await executeStatement(db, prepared.sql, prepared.params)
+        await executeStatement(db, prepared.sql, prepared.params, { display: prepared.display })
     }
 
     context.subscriptions.push(
@@ -140,7 +142,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
             const prepared = prepare(sql, typeof block === "string" ? block : null)
             if ("error" in prepared) { log(`runStatement: rejected: ${prepared.error}`); void vscode.window.showErrorMessage(prepared.error); return }
             try {
-                await executeStatement(db, prepared.sql, prepared.params)
+                await executeStatement(db, prepared.sql, prepared.params, { display: prepared.display })
             } catch (err) {
                 log(`runStatement: unexpected ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
                 void vscode.window.showErrorMessage(`Run failed: ${err instanceof Error ? err.message : String(err)}`)
