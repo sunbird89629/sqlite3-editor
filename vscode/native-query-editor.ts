@@ -100,7 +100,11 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
     context.subscriptions.push(
         vscode.commands.registerCommand("sqlite3-editor.runQuery", run),
         vscode.commands.registerCommand("sqlite3-editor.runStatement", (db: unknown, sql: unknown, block: unknown) => {
-            if (typeof db !== "string" || typeof sql !== "string" || sql.trim() === "") { return }
+            if (typeof db !== "string" || typeof sql !== "string" || sql.trim() === "") {
+                // Never fail silently: a click with no visible reaction is indistinguishable from a bug.
+                void vscode.window.showWarningMessage("Run needs a session and a statement. Open the document with SQL Editor first.")
+                return
+            }
             const prepared = prepare(sql, typeof block === "string" ? block : null)
             if ("error" in prepared) { void vscode.window.showErrorMessage(prepared.error); return }
             return executeStatement(db, prepared.sql, prepared.params)
