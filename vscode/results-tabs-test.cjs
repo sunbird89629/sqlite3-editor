@@ -1,6 +1,6 @@
 // Run with `npm test` in vscode/: checks the results tab model.
 const assert = require('assert')
-const { addTab, closeTab, replaceTab, tabLabel, RESULT_TAB_LIMIT } = require('./.tmp/results-tabs.cjs')
+const { addTab, closeTab, replaceTab, tabLabel, statementSummary, RESULT_TAB_LIMIT } = require('./.tmp/results-tabs.cjs')
 
 const tab = (id) => ({ id, sql: `SELECT ${id}`, columns: ['a'], rows: [['1']], total: 1, durationMs: 1 })
 
@@ -25,5 +25,28 @@ assert.strictEqual(replaced[2].total, 9)
 assert.strictEqual(tabLabel('SELECT\n  * FROM runs'), 'SELECT * FROM runs')
 assert.strictEqual(tabLabel('x'.repeat(80)).length, 48)
 assert.ok(tabLabel('x'.repeat(80)).endsWith('…'))
+
+// Tab labels drop comments, so a SELECT whose columns were commented out stays readable.
+assert.strictEqual(
+    statementSummary([
+        'SELECT',
+        '    -- sequence,',
+        '    -- kind,',
+        '    -- payload',
+        "    message_content",
+        'FROM turn_events',
+    ].join('\n')),
+    'SELECT message_content FROM turn_events',
+)
+// A long statement is truncated rather than wrapped.
+assert.ok(statementSummary([
+    'SELECT',
+    '    -- sequence,',
+    "    JSON_UNQUOTE(JSON_EXTRACT(payload, '$.content.message')) AS message_content",
+    'FROM turn_events',
+].join('\n')).startsWith('SELECT JSON_UNQUOTE'))
+assert.strictEqual(statementSummary('SELECT /* c */ 1'), 'SELECT 1')
+assert.strictEqual(statementSummary("SELECT '-- not a comment'"), "SELECT '-- not a comment'")
+assert.strictEqual(statementSummary('x'.repeat(100)).length, 72)
 
 console.log('results-tabs: all assertions passed')

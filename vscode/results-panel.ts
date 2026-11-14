@@ -1,5 +1,5 @@
 import vscode from "vscode"
-import { addTab, closeTab, replaceTab } from "./results-tabs"
+import { addTab, closeTab, replaceTab, statementSummary } from "./results-tabs"
 import type { ResultTab, ResultTabData } from "./results-tabs"
 
 /** What Re-run needs: the statement as written plus its bound parameter values. */
@@ -120,7 +120,7 @@ export const createResultsController = (context: vscode.ExtensionContext, deps: 
             const state = await ensure(session)
             state.nextId += 1
             const id = `${session}#${state.nextId}`
-            state.tabs = addTab(state.tabs, { id, sql, columns: [], rows: [], total: 0, durationMs: 0, running: true })
+            state.tabs = addTab(state.tabs, { id, sql, summary: statementSummary(sql), columns: [], rows: [], total: 0, durationMs: 0, running: true })
             state.activeId = id
             state.error = ""
             state.panel.reveal(undefined, true)

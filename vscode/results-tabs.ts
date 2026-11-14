@@ -3,6 +3,8 @@
 export type ResultTabData = {
     /** Statement that produced this result, used by Re-run. */
     sql: string
+    /** One-line label without comments; shown in the tab and the header. */
+    summary?: string
     columns: string[]
     /** Display-ready cell strings; the extension already capped the row count. */
     rows: string[][]
@@ -32,4 +34,49 @@ export const replaceTab = (tabs: readonly ResultTab[], id: string, data: ResultT
 export const tabLabel = (sql: string, max = 48): string => {
     const oneLine = sql.replace(/\s+/g, " ").trim()
     return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`
+}
+
+/**
+ * A label for the tab: the statement with its comments removed, so a SELECT whose columns were
+ * commented out does not turn the title into `SELECT -- sequence, -- kind…`.
+ */
+export const statementSummary = (sql: string, max = 72): string => {
+    let text = ""
+    let index = 0
+    while (index < sql.length) {
+        const character = sql[index]!
+        const next = sql[index + 1]
+        if (character === "-" && next === "-" || character === "#") {
+            const end = sql.indexOf("\n", index)
+            index = end === -1 ? sql.length : end
+            text += " "
+            continue
+        }
+        if (character === "/" && next === "*") {
+            const end = sql.indexOf("*/", index + 2)
+            index = end === -1 ? sql.length : end + 2
+            text += " "
+            continue
+        }
+        if (character === "'" || character === '"' || character === "`") {
+            const quote = character
+            const from = index
+            index += 1
+            while (index < sql.length) {
+                const current = sql[index]!
+                if (current === "\\" && quote !== "`") { index += 2; continue }
+                if (current === quote) {
+                    if (sql[index + 1] === quote) { index += 2; continue }
+                    index += 1
+                    break
+                }
+                index += 1
+            }
+            text += sql.slice(from, index)
+            continue
+        }
+        text += character
+        index += 1
+    }
+    return tabLabel(text, max)
 }

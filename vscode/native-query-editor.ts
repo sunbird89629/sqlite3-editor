@@ -2,6 +2,7 @@ import vscode from "vscode"
 import type { MySqlClient } from "./mysql-client"
 import { registerSqlLens, sessionOf } from "./sql-lens"
 import { createResultsController } from "./results-panel"
+import { statementSummary } from "./results-tabs"
 import { bindParams, paramsBlockAt, parseParams, placeholderNames } from "./sql-params"
 import type { BindResult, ParamValue } from "./sql-params"
 import { splitStatements } from "./sql-statements"
@@ -83,6 +84,7 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
             const columns = result.columns
             const data: ResultTabData = {
                 sql,
+                summary: statementSummary(sql),
                 columns,
                 rows: result.records.slice(0, RESULT_ROW_LIMIT).map((record) => columns.map((column) => display(record[column]))),
                 total: result.records.length,

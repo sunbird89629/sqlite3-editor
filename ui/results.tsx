@@ -54,7 +54,7 @@ const App = () => {
                 key={tab.id}
                 onClick={() => setActiveId(tab.id)}
                 title={tab.sql}>
-                <span class="label">{tab.sql.replace(/\s+/g, " ").trim().slice(0, 48)}</span>
+                <span class="label">{tab.summary ?? tab.sql.replace(/\s+/g, " ").trim().slice(0, 48)}</span>
                 <span class="rows">{tab.running ? "…" : `${tab.total} ${tab.total === 1 ? "row" : "rows"}`}</span>
                 <button
                     class="close close-danger"
@@ -72,7 +72,7 @@ const App = () => {
             </div>
             : <div class="result">
                 <div class="head">
-                    <span class="sql" title={active.sql}>{active.sql.replace(/\s+/g, " ").trim()}</span>
+                    <span class="sql" title={active.sql}>{active.summary ?? active.sql.replace(/\s+/g, " ").trim()}</span>
                     <span class="stats">{active.running ? "running…" : `${active.total} ${active.total === 1 ? "row" : "rows"} · ${Math.round(active.durationMs)} ms`}{session !== "" ? ` · ${session}` : ""}</span>
                     <span class="actions">
                         <button class="btn" onClick={() => copy("csv")}>Copy CSV</button>
