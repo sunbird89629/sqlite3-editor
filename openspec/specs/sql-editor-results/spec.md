@@ -48,15 +48,23 @@
 
 ### Requirement: 重跑与长值
 
-页签 SHALL 提供重跑操作，重跑 SHALL 用新结果替换当前页签内容并 SHALL NOT 新建页签。结果中的长值 SHALL 截断显示；用户点击被截断的单元格时 SHALL 在编辑器区打开该值的只读快照。
+页签 SHALL 提供重跑操作，重跑 SHALL 用新结果替换当前页签内容并 SHALL NOT 新建页签。结果中的长值 SHALL 截断显示。双击任意单元格 SHALL 在编辑器区打开该值的只读快照；被截断的单元格 SHALL 额外支持单击打开。NULL 单元格 SHALL NOT 提供该操作。
 
 #### Scenario: 重跑
 - **WHEN** 用户点击某个页签的重跑
 - **THEN** 该页签显示最新一次执行的结果，页签数量不变
 
 #### Scenario: 查看长值
-- **WHEN** 用户点击一个被截断的单元格
+- **WHEN** 用户单击一个被截断的单元格
 - **THEN** 编辑器区打开该值的只读快照，不写回数据库
+
+#### Scenario: 查看短值
+- **WHEN** 用户双击任意一个普通单元格
+- **THEN** 同样打开该值的只读快照
+
+#### Scenario: NULL 单元格
+- **WHEN** 用户双击一个 NULL 单元格
+- **THEN** 不打开快照
 
 ### Requirement: 与会话同生命周期
 

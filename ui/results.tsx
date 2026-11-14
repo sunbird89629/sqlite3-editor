@@ -86,10 +86,14 @@ const App = () => {
                         <tbody>{active.rows.map((row) => <tr>{row.map((value, index) => {
                             const numeric = /^-?\d+(\.\d+)?$/.test(value)
                             const truncated = value.length >= 512
+                            // Every cell can be opened; the truncated ones are also openable with one click.
+                            const openable = value !== "NULL" && value !== ""
+                            const open = () => post({ command: "openValue", id: active.id, column: index, value })
                             return <td
-                                class={truncated ? "truncated" : numeric ? "number" : "value"}
-                                onClick={truncated ? () => post({ command: "openValue", id: active.id, column: index, value }) : undefined}
-                                title={truncated ? "Open the full value in an editor tab" : undefined}>
+                                class={(openable ? "cell " : "") + (truncated ? "truncated" : numeric ? "number" : "value")}
+                                onClick={truncated ? open : undefined}
+                                onDblClick={openable ? open : undefined}
+                                title={openable ? "Double-click to open the full value in an editor tab" : undefined}>
                                 {truncated ? <>{value.slice(0, 512)}<span class="more">… click for the full value</span></> : display(value)}
                             </td>
                         })}</tr>)}</tbody>
@@ -97,8 +101,9 @@ const App = () => {
                 </div>
                 <div class="foot">
                     {active.total > active.rows.length
-                        ? `Showing the first ${active.rows.length} of ${active.total} rows.`
-                        : "Click a truncated cell to open the full value in an editor tab."}
+                        ? `Showing the first ${active.rows.length} of ${active.total} rows. `
+                        : ""}
+                    Double-click any cell to open its value in an editor tab; truncated cells open with one click.
                 </div>
             </div>}
     </>
