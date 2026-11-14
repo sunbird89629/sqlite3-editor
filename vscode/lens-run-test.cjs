@@ -18,6 +18,7 @@ const vscode = {
     Range: class { constructor(...args) { this.args = args } },
     CodeLens: class { constructor(range, command) { this.range = range; this.command = command } },
     ViewColumn: { Beside: 2 },
+    ProgressLocation: { Notification: 15 },
     CompletionList: class { constructor(items) { this.items = items } },
     CompletionItem: class { constructor(label, kind) { this.label = label; this.kind = kind } },
     CompletionItemKind: { Field: 1, Class: 2, Keyword: 3 },
@@ -42,6 +43,7 @@ const vscode = {
         showWarningMessage: (message) => { warned.push(message); return Promise.resolve(undefined) },
         showInformationMessage: () => Promise.resolve(undefined),
         createOutputChannel: () => ({ appendLine: (line) => logs.push(line), append: () => {}, dispose: () => {} }),
+        withProgress: async (_options, task) => task(),
         activeTextEditor: undefined,
     },
     commands: { registerCommand: (id, handler) => { registered.set(id, handler); return disposable() } },
@@ -78,6 +80,11 @@ controller.addConnection('local/evaluation', client)
     console.log('errors:', errors, 'warnings:', warned)
     const message = posted.find((entry) => entry.type === 'sqlite3-editor-results')
     console.log('tabs in payload:', message?.tabs?.length, JSON.stringify(message?.tabs?.[0]?.columns))
+    const messages = posted.filter((entry) => entry.type === 'sqlite3-editor-results')
+    assert.strictEqual(messages.length, 2, 'a running tab and then the filled tab are posted')
+    assert.strictEqual(messages[0].tabs[0].running, true, 'the first post is the running tab')
+    assert.deepStrictEqual(messages[1].tabs[0].rows, [['abc', 'chunk']], 'the second post carries the rows')
+    assert.ok(!messages[1].tabs[0].running, 'the filled tab is no longer running')
     console.log('log lines:'); for (const line of logs) { console.log('  ' + line) }
     process.exit(0)
 })().catch((err) => { console.error('FAILED:', err); process.exit(1) })

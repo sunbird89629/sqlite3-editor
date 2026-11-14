@@ -65,10 +65,18 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
             return undefined
         }
         const started = Date.now()
+        // A tab appears before the query runs, so a slow statement does not look like a dead click.
+        const tabId = options.addTab !== false ? await results.begin(db, sql) : undefined
+        if (tabId !== undefined) { log(`execute: running tab ${tabId}`) }
         try {
-            const result = await client.query(sql, [...params])
-            log(`execute: rows=${result.records?.length ?? 0} columns=${result.columns?.length ?? 0}`)
+            const summary = sql.replace(/\s+/g, " ").trim().slice(0, 60)
+            const result = await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `Running ${summary}…` },
+                () => client.query(sql, [...params]),
+            )
+            log(`execute: rows=${result.records?.length ?? 0} columns=${result.columns?.length ?? 0} after ${Date.now() - started} ms`)
             if (!result.columns || !result.records) {
+                if (tabId !== undefined) { results.close(db, tabId) }
                 void vscode.window.showInformationMessage("SQL statement executed.")
                 return undefined
             }
@@ -80,14 +88,16 @@ export function registerQueryEditor(context: vscode.ExtensionContext, options: {
                 total: result.records.length,
                 durationMs: Date.now() - started,
             }
-            if (options.addTab !== false) {
-                log(`execute: showing the result panel for ${db}`)
+            if (tabId !== undefined) {
+                await results.update(db, tabId, data, { sql, params: [...params] })
+                log(`execute: filled tab ${tabId}`)
+            } else {
                 await results.show(db, data, { sql, params: [...params] })
-                log("execute: result panel updated")
             }
             return data
         } catch (err) {
-            log(`execute: failed ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
+            if (tabId !== undefined) { results.close(db, tabId) }
+            log(`execute: failed after ${Date.now() - started} ms ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
             void vscode.window.showErrorMessage(`SQL query failed: ${err instanceof Error ? err.message : String(err)}`)
             return undefined
         }

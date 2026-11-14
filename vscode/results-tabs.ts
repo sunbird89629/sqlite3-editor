@@ -9,6 +9,8 @@ export type ResultTabData = {
     /** Rows in the full result, which can be more than `rows.length`. */
     total: number
     durationMs: number
+    /** True between the click and the server's answer, so the panel can show that work is happening. */
+    running?: boolean
 }
 
 export type ResultTab = ResultTabData & { id: string }
@@ -24,7 +26,7 @@ export const closeTab = (tabs: readonly ResultTab[], id: string): ResultTab[] =>
 
 /** Replaces the data of one tab, which is what Re-run does: same tab, fresh rows. */
 export const replaceTab = (tabs: readonly ResultTab[], id: string, data: ResultTabData): ResultTab[] =>
-    tabs.map((tab) => tab.id === id ? { ...tab, ...data } : tab)
+    tabs.map((tab) => tab.id === id ? { ...tab, ...data, running: false } : tab)
 
 /** One line, bounded, for the tab title. */
 export const tabLabel = (sql: string, max = 48): string => {

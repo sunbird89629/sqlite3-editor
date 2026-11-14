@@ -1,7 +1,7 @@
 {
   "name": "vscode-sqlite3-editor",
   "displayName": "MySQL Viewer",
-  "version": "4.0.15",
+  "version": "4.0.16",
   "description": "Browse MySQL databases read-only, like a spreadsheet.",
   "main": "extension.js",
   "publisher": "yy0931",

@@ -6,7 +6,14 @@ import type { ResultTab, ResultTabData } from "./results-tabs"
 export type RerunPlan = { sql: string, params: unknown[] }
 
 export type ResultsController = {
-    /** Adds a result tab (evicting the oldest beyond five) and reveals the panel beside the editor. */
+    /**
+     * Opens the panel with a tab in the running state and returns its id, so a slow query shows
+     * something immediately. Fill it with `update`, or drop it with `close` on failure.
+     */
+    begin: (session: string, sql: string) => Promise<string | undefined>
+    /** Removes a tab; closes the panel when it was the last one. */
+    close: (session: string, id: string) => void
+    /** Adds a completed result tab (evicting the oldest beyond five) and reveals the panel. */
     show: (session: string, data: ResultTabData, plan?: RerunPlan) => Promise<void>
     /** Replaces the data of an existing tab; used by Re-run and by Execute again. */
     update: (session: string, id: string, data: ResultTabData, plan?: RerunPlan) => Promise<void>
@@ -100,7 +107,32 @@ export const createResultsController = (context: vscode.ExtensionContext, deps: 
         return state
     }
 
+    const dropTab = (state: State, id: string) => {
+        state.tabs = closeTab(state.tabs, id)
+        plans.delete(id)
+        if (state.tabs.length === 0) { state.panel.dispose(); return }
+        state.activeId = state.activeId === id ? state.tabs[state.tabs.length - 1]?.id : state.activeId
+        post(state)
+    }
+
     return {
+        async begin(session, sql) {
+            const state = await ensure(session)
+            state.nextId += 1
+            const id = `${session}#${state.nextId}`
+            state.tabs = addTab(state.tabs, { id, sql, columns: [], rows: [], total: 0, durationMs: 0, running: true })
+            state.activeId = id
+            state.error = ""
+            state.panel.reveal(undefined, true)
+            log(`added a running tab for ${session}`)
+            post(state)
+            return id
+        },
+        close(session, id) {
+            const state = states.get(session)
+            if (state === undefined) { return }
+            dropTab(state, id)
+        },
         async show(session, data, plan) {
             const state = await ensure(session)
             state.nextId += 1

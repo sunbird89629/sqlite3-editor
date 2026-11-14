@@ -55,7 +55,7 @@ const App = () => {
                 onClick={() => setActiveId(tab.id)}
                 title={tab.sql}>
                 <span class="label">{tab.sql.replace(/\s+/g, " ").trim().slice(0, 48)}</span>
-                <span class="rows">{tab.total} {tab.total === 1 ? "row" : "rows"}</span>
+                <span class="rows">{tab.running ? "…" : `${tab.total} ${tab.total === 1 ? "row" : "rows"}`}</span>
                 <button
                     class="close close-danger"
                     aria-label="Close result"
@@ -73,14 +73,19 @@ const App = () => {
             : <div class="result">
                 <div class="head">
                     <span class="sql" title={active.sql}>{active.sql.replace(/\s+/g, " ").trim()}</span>
-                    <span class="stats">{active.total} {active.total === 1 ? "row" : "rows"} · {Math.round(active.durationMs)} ms{session !== "" ? ` · ${session}` : ""}</span>
+                    <span class="stats">{active.running ? "running…" : `${active.total} ${active.total === 1 ? "row" : "rows"} · ${Math.round(active.durationMs)} ms`}{session !== "" ? ` · ${session}` : ""}</span>
                     <span class="actions">
                         <button class="btn" onClick={() => copy("csv")}>Copy CSV</button>
                         <button class="btn" onClick={() => copy("json")}>Copy JSON</button>
                         <button class="btn" onClick={() => post({ command: "rerun", id: active.id })}>Re-run</button>
                     </span>
                 </div>
-                <div class="body">
+                {active.running
+                    ? <div class="body running" data-testid="result-running">
+                        <div class="spinner"></div>
+                        <div><strong>Running…</strong><div class="running-hint">Waiting for the server. Large tables and remote connections can take a while.</div></div>
+                    </div>
+                    : <div class="body">
                     <table>
                         <thead><tr>{active.columns.map((column) => <th>{column}</th>)}</tr></thead>
                         <tbody>{active.rows.map((row) => <tr>{row.map((value, index) => {
@@ -98,12 +103,11 @@ const App = () => {
                             </td>
                         })}</tr>)}</tbody>
                     </table>
-                </div>
+                </div>}
                 <div class="foot">
-                    {active.total > active.rows.length
-                        ? `Showing the first ${active.rows.length} of ${active.total} rows. `
-                        : ""}
-                    Double-click any cell to open its value in an editor tab; truncated cells open with one click.
+                    {active.running
+                        ? "The statement is still running; the tab fills when it returns."
+                        : <>{active.total > active.rows.length ? `Showing the first ${active.rows.length} of ${active.total} rows. ` : ""}Double-click any cell to open its value in an editor tab; truncated cells open with one click.</>}
                 </div>
             </div>}
     </>
